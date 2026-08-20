@@ -1,0 +1,1547 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ため池災害前後比較ビューア 試行版 | v1.9-q</title>
+<!-- v1.9-q: 外部 CDN (unpkg) をやめ、MapLibre GL JS 5.24.0 を vendor/ へ同梱した。
+     公開サイトの表示を自分たちの管理下に置くため。LICENSE も同梱している。 -->
+<link rel="stylesheet" href="./vendor/maplibre-gl.css">
+<style>
+:root { --bar:#1e2a38; --fg:#f2f2f2; --panel:rgba(24,26,30,0.88);
+        --line:rgba(255,255,255,0.18); --accent:#7dd3fc;
+        --sel:#00e5ff;                       /* 選択等高線・測線・カーソル */
+        --pond:#1d4ed8; --pond-sel:#f59e0b;  /* ため池 / 選択ため池 */
+        --lbl-fg:#ffffff; --lbl-halo:#000000; }
+* { box-sizing: border-box; }
+html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-ui,sans-serif; }
+
+/* ---- 上下のバー + 左右ペイン (v1.5 の骨格をそのまま) -------------------- */
+#topbar { height:44px; display:flex; align-items:center; gap:12px; padding:0 12px;
+          background:var(--bar); color:#fff; font-size:13px; white-space:nowrap;
+          overflow-x:auto; overflow-y:visible; position:relative; z-index:30; }
+#topbar b { font-size:15px; }
+/* v1.9-q: 版の補助表示。主タイトルより小さく、控えめにする (指示 6 節) */
+#topbar .ver { font-size:11px; opacity:.72; margin-left:6px; align-self:center; }
+#topbar label { display:flex; align-items:center; gap:4px; }
+#topbar select, #topbar button, #topbar input {
+  font:inherit; font-size:12px; padding:2px 6px; border-radius:4px;
+  border:1px solid #55697e; background:#2b3a4c; color:#fff; }
+#topbar select, #topbar button { cursor:pointer; }
+#topbar .ds { color:#9fb0c0; }
+#topbar .spacer { margin-left:auto; }
+
+/* ---- ため池検索 (技術検証用の最小 UI) ----------------------------------- */
+#searchWrap { position:relative; }
+#q { width:180px; }
+#qCount { color:#9fb0c0; font-size:11px; margin-left:4px; }
+/* ★ position:fixed にしてある。#topbar は overflow-x:auto なので、
+ *   その中で position:absolute にすると候補リストが 44px の高さで
+ *   切り取られて読めなくなる (CSS 上 overflow-x:auto は overflow-y を
+ *   visible のままにできない)。left は JS が検索欄の位置から入れる。 */
+#results { position:fixed; z-index:40; top:46px; left:0;
+  width:330px; max-height:340px; overflow-y:auto; display:none;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
+#results .r { padding:5px 9px; cursor:pointer; border-bottom:1px solid rgba(255,255,255,.07);
+  font-size:12px; line-height:1.4; white-space:normal; }
+#results .r:hover { background:rgba(125,211,252,.18); }
+#results .r .nm { font-weight:700; }
+#results .r .sub { color:#9fb0c0; font-size:11px; }
+#results .none { padding:7px 9px; color:#fca5a5; font-size:12px; }
+#results .more { padding:5px 9px; color:#9fb0c0; font-size:11px; }
+
+#wrap { display:flex; height:calc(100% - 44px - 30px); }
+.pane { flex:1 1 0; position:relative; min-width:0; }
+.pane + .pane { border-left:2px solid var(--bar); }
+.map { position:absolute; inset:0; background:#dde3e8; }
+.pane-label { position:absolute; top:8px; left:8px; z-index:3; pointer-events:none;
+  background:rgba(30,42,56,.85); color:#fff; padding:3px 10px; border-radius:4px; font-size:13px; }
+
+/* ---- v1.5 から: 測線・標高ラベル・同期カーソルの重ね描き ---------------- */
+.overlay { position:absolute; inset:0; z-index:4; pointer-events:none; overflow:hidden; }
+.axis { position:absolute; background:none; }
+.axis-v { left:50%; width:0; border-left:1px dashed var(--sel); opacity:.55; }
+.axis-h { top:50%; height:0; border-top:1px dashed var(--sel); opacity:.55; }
+.axis-c { position:absolute; left:50%; top:50%; width:11px; height:11px; margin:-6px 0 0 -6px;
+  border:1px solid var(--sel); border-radius:50%; opacity:.8; }
+.ct-label { position:absolute; left:0; top:0; white-space:nowrap; transform-origin:center;
+  color:var(--lbl-fg); font-size:12px; font-weight:700; line-height:1;
+  text-shadow:-1px -1px 0 var(--lbl-halo), 1px -1px 0 var(--lbl-halo),
+              -1px 1px 0 var(--lbl-halo), 1px 1px 0 var(--lbl-halo),
+               0 0 3px var(--lbl-halo); }
+.ct-label.idx { font-size:13px; font-weight:800; }
+.ct-label.sel { color:var(--sel); }
+.ghost { position:absolute; width:13px; height:13px; margin:-7px 0 0 -7px;
+  border:2px solid var(--sel); border-radius:50%; display:none; }
+
+/* ---- v1.6: 選択したため池の諸元 (最終デザインではない) ------------------
+ * ★ pointer-events:none は必須。地図に重ねる表示専用パネルなので、
+ *   これが無いとパネルの下にある等高線をクリックできなくなる
+ *   (水位読取が「効かない」ように見える。v1.6 の実装中に踏んだ)。 */
+#panel-pond { position:absolute; z-index:6; top:40px; left:8px; width:238px;
+  pointer-events:none;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
+  padding:9px 11px; font-size:12px; line-height:1.55; backdrop-filter:blur(4px);
+  box-shadow:0 4px 16px rgba(0,0,0,.35); display:none; }
+#panel-pond .pname { font-weight:700; font-size:14px; color:var(--pond-sel); }
+#panel-pond .paddr { color:#9fb0c0; font-size:11px; margin-bottom:5px;
+  padding-bottom:4px; border-bottom:1px solid var(--line); }
+#panel-pond dl { display:grid; grid-template-columns:auto 1fr; gap:0 8px; margin:0; }
+#panel-pond dt { color:#9fb0c0; }
+#panel-pond dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+
+/* ---- 診断パネル (v1.5 から。ため池の行を足した) ------------------------- */
+#panel-diag { position:absolute; z-index:5; top:8px; right:8px; width:262px;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
+  padding:9px 11px; font-size:12px; line-height:1.55; backdrop-filter:blur(4px);
+  box-shadow:0 4px 16px rgba(0,0,0,0.35); }
+#panel-diag .panel-title { font-weight:700; letter-spacing:.04em; color:var(--accent);
+  margin:0 0 5px; padding-bottom:4px; border-bottom:1px solid var(--line);
+  display:flex; align-items:center; gap:6px; }
+#panel-diag .panel-title button {
+  font:inherit; font-size:10px; padding:1px 6px; margin-left:auto; cursor:pointer;
+  color:var(--fg); background:rgba(255,255,255,0.08); border:1px solid var(--line); border-radius:4px; }
+#panel-diag dl { display:grid; grid-template-columns:auto 1fr; gap:0 8px; margin:0; }
+#panel-diag dt { color:#9fb0c0; }
+#panel-diag dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+#d-err { margin-top:5px; font-size:11px; color:#fca5a5; white-space:pre-wrap; }
+.ok { color:#86efac; } .ng { color:#fca5a5; } .warn { color:#fcd34d; }
+
+#statusbar { height:30px; display:flex; align-items:center; gap:16px; padding:0 12px;
+             background:#f0f2f5; color:#333; font-size:13px; border-top:1px solid #ccc;
+             white-space:nowrap; overflow-x:auto; }
+#statusbar .hint { background:#0077b6; color:#fff; padding:3px 10px; border-radius:12px;
+                   font-weight:bold; }
+#statusbar b { color:#b30000; }
+#statusbar #wl { font-size:15px; }
+#statusbar button { font:inherit; font-size:12px; padding:1px 8px; border-radius:4px;
+  border:1px solid #99a; background:#fff; cursor:pointer; }
+#statusbar .src { margin-left:auto; color:#666; font-size:12px; }
+
+.maplibregl-popup-content { font-family:inherit; font-size:12px; padding:7px 11px; }
+.maplibregl-popup-content b { font-size:15px; }
+
+#nodata { position:absolute; z-index:50; left:50%; top:50%; transform:translate(-50%,-50%);
+  background:rgba(120,20,20,0.94); color:#fff; padding:16px 22px; border-radius:8px;
+  font-size:13px; line-height:1.9; display:none; max-width:640px; }
+#nodata code { background:rgba(0,0,0,0.35); padding:1px 5px; border-radius:3px; }
+
+/* v1.8-q: DEM が継続的に取れないときだけ出す帯。
+   地図やため池は使えるままなので、覆い隠さない細い表示にとどめる。 */
+#demwarn { position:absolute; z-index:45; left:50%; top:54px; transform:translateX(-50%);
+  background:rgba(150,30,30,0.94); color:#fff; padding:6px 14px; border-radius:6px;
+  font-size:13px; font-weight:bold; line-height:1.5; display:none;
+  box-shadow:0 2px 8px rgba(0,0,0,0.35); pointer-events:none; }
+#demwarn span { display:block; font-weight:normal; font-size:11px; opacity:.85; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <b>ため池災害前後比較ビューア 試行版</b><span class="ver">GitHub Pages 試験運用版 v1.9-q</span>
+  <span class="ds">等高線: <span id="h-dataset">-</span></span>
+  <span id="searchWrap">
+    <input id="q" type="search" placeholder="ため池名で検索" autocomplete="off">
+    <span id="qCount"></span>
+    <div id="results"></div>
+  </span>
+  <button id="homeBtn">全域へ戻る</button>
+  <label>左背景: <select id="baseL"></select></label>
+  <label>右背景: <select id="baseR"></select></label>
+  <label>測線: <select id="axisDir">
+    <option value="both" selected>両方</option>
+    <option value="v">縦</option>
+    <option value="h">横</option>
+    <option value="none">なし</option>
+  </select></label>
+  <span class="spacer"></span>
+  <button id="panesBtn">1画面で計測</button>
+</div>
+
+<div id="wrap">
+  <div class="pane" id="paneL">
+    <div class="pane-label">左</div>
+    <div id="mapL" class="map"></div>
+    <div class="overlay" id="ovL"></div>
+    <div id="panel-pond">
+      <div class="pname" id="p-name">-</div>
+      <div class="paddr" id="p-addr">-</div>
+      <dl>
+        <dt>堤高</dt><dd id="p-dam">-</dd>
+        <dt>堤頂長</dt><dd id="p-crest">-</dd>
+        <dt>総貯水量</dt><dd id="p-vol">-</dd>
+        <dt>満水面積</dt><dd id="p-area">-</dd>
+      </dl>
+    </div>
+  </div>
+  <div class="pane" id="paneR">
+    <div class="pane-label">右</div>
+    <div id="mapR" class="map"></div>
+    <div class="overlay" id="ovR"></div>
+    <div id="panel-diag">
+      <div class="panel-title">診断 <button id="resetBtn">計測リセット</button></div>
+      <dl>
+        <dt>画面数</dt><dd id="d-panes">-</dd>
+        <dt>ズーム</dt><dd id="d-zoom">-</dd>
+        <dt>等高線</dt><dd id="d-zstate">-</dd>
+        <dt>ため池</dt><dd id="d-ponds">読込中...</dd>
+        <dt>DEM 接続</dt><dd id="d-range">確認中...</dd>
+        <dt>Worker</dt><dd id="d-worker">-</dd>
+        <dt>等高線タイル</dt><dd id="d-req">-</dd>
+        <dt>&nbsp;&nbsp;DEM 参照 (延べ)</dt><dd id="d-demref">-</dd>
+        <dt>&nbsp;&nbsp;DEM 取得 (網)</dt><dd id="d-net">-</dd>
+        <dt>&nbsp;&nbsp;生成失敗</dt><dd id="d-cache">-</dd>
+        <dt>初期表示</dt><dd id="d-first">計測中...</dd>
+        <dt>直前の再描画</dt><dd id="d-idle">-</dd>
+        <dt>測線ラベル 左/右</dt><dd id="d-lbl">-</dd>
+      </dl>
+      <div id="d-err"></div>
+    </div>
+  </div>
+</div>
+
+<div id="statusbar">
+  <span class="hint">ため池を選ぶ → 等高線をクリックで水位</span>
+  <span>選択池: <b id="s-pond">未選択</b></span>
+  <span>水位: <b id="wl">未選択</b></span>
+  <button id="clearWL">水位解除</button>
+  <span id="cursorPos"></span>
+  <span class="src">出典: 国土地理院タイル / 林野庁 能登地域2024 DEM (PDL1.0) / ため池: <span id="s-src">-</span>
+    / 等高線生成: maplibre-contour (numpng 対応版, BSD-3-Clause)</span>
+</div>
+
+<div id="nodata"></div>
+<div id="demwarn">等高線データを取得できません。<span>地図とため池の表示は使えます (詳細は console)</span></div>
+
+<script src="./vendor/maplibre-gl.js"></script>
+<!-- v1.8-q: PMTiles をやめ、DEM から等高線をその場で作る。npm に無い fork なので vendor する -->
+<script src="./vendor/maplibre-contour-numpng.min.js"></script>
+<script>
+"use strict";
+const T0 = performance.now();
+
+/* ==========================================================================
+ * 1. 設定 — 触るのはこの節だけ
+ * ========================================================================== */
+
+/* --- DEM (v1.8-q で PMTiles と入れ替えた部分) -----------------------------
+ * 等高線はもう事前生成しない。G空間情報センターの林野庁 DEM タイルを
+ * ブラウザが直接取り、maplibre-contour が等高線に変換する。
+ * 一次配布元。v1.7-q で実測確認済み:
+ *   z8-18 / XYZ / 256px RGBA PNG / 地理院方式 (numpng) / alpha=0 が無効値
+ *   海域はマスク済み / ACAO:* / AWS CloudFront 配信
+ * ★ ローカルには 1 byte も保存しない。R2 も PMTiles も使わない。 */
+const DEM_URL = "https://rinya-tiles.geospatial.jp/dem_r06eq_2025/{z}/{x}/{y}.png";
+const DEM_MAXZOOM = 18;
+// DEM が存在する範囲 [w, s, e, n]。z11 のタイルを総当たりして外接矩形を取った (v1.7-q)。
+// source に bounds を入れておけば MapLibre が範囲外を要求しないので、
+// 能登の外へパンしたときの 404 の山を防げる。
+const DEM_BOUNDS = [136.5820, 36.5979, 137.4609, 37.5794];
+
+// ため池諸元。v1.1 の build_dual_disaster_viewer.py --build-pond-json が作る JSON を
+// **そのまま**読む。フィールド名は実ファイルに合わせてある (下の normalizePond)。
+const POND_JSON_URL = new URL("noto_ponds.json", location.href).href;
+
+// v1.6 の基本データは 0.5m 版。?dataset=1m で 1m 版に切り替わる (比較・検証用)。
+// 2 択のまま。UI の選択肢は増やさない。
+//
+// v1.8-q では中身が「PMTiles ファイル名」から「ズーム別の等高線間隔」に変わった。
+// ズーム連動が要るのは、動的生成では **表示ズームが DEM の分解能を決める** ため。
+//   z18 = 0.47 m/px   z17 = 0.95 m/px   z16 = 2.4 m/px
+// 0.5 m 間隔は z18 でだけ意味がある (z16 で使うと平坦部で線が毛羽立つ。v1.7-q で実測)。
+// v1.6 の PMTiles は常に 0.5m DEM から作ってあったので z16 でも成立していたが、
+// 動的生成では同じにはできない。だから 0.5m 版でも z17 以下は自動的に粗くする。
+// 表の値は [通常等高線, 主曲線] (m)。指定の無いズームは「以下で最大のキー」が使われる。
+const DATASET = "0.5m";
+const DATASETS = {
+  "0.5m": { label: "0.5 m 間隔",
+            thresholds: { 10:[100,500], 11:[50,250], 12:[50,250], 13:[20,100],
+                          14:[10,50],   15:[5,25],   16:[2,10],   17:[1,5], 18:[0.5,2.5] } },
+  "1m":   { label: "1 m 間隔",
+            thresholds: { 10:[100,500], 11:[50,250], 12:[50,250], 13:[20,100],
+                          14:[10,50],   15:[5,25],   16:[2,10],   17:[1,5], 18:[1,5] } },
+};
+
+// 背景地図 (v1.5 から変更なし。追加・削除・UI 再設計はしない)
+const BASEMAPS = {
+  gsi_std:     { label: "標準地図(地理院)",       url: "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png" },
+  gsi_ortho:   { label: "オルソ(電子国土基本図)", url: "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg" },
+  rinya_ortho: { label: "災害後オルソ(林野庁)",   url: "https://forestgeo.info/opendata/17_ishikawa/noto/orthophoto_2024/{z}/{x}/{y}.webp" },
+  rinya_rrim:  { label: "赤色立体地図(林野庁)",   url: "https://forestgeo.info/opendata/17_ishikawa/noto/rrim_2024/{z}/{x}/{y}.webp" },
+  rinya_cs:    { label: "CS立体図(林野庁)",       url: "https://forestgeo.info/opendata/17_ishikawa/noto/csmap_2024/{z}/{x}/{y}.webp" },
+  rinya_inyou: { label: "陰陽図(林野庁)",         url: "https://forestgeo.info/opendata/17_ishikawa/noto/inyouzu_2024/{z}/{x}/{y}.webp" },
+  none:        { label: "なし",                   url: null },
+};
+const BASE_L_DEFAULT = "gsi_std";
+const BASE_R_DEFAULT = "rinya_ortho";
+const BASEMAP_MAXZOOM = 18;
+
+// クラスタ件数の文字に要る glyphs。MapLibre 公式のデモ配信を使う。
+// ★ 同じホストでも "Open Sans Regular" は 404 で、"Noto Sans Regular" だけが 200。
+//    フォント名を変えるときは必ず実際に取れるか確かめること。
+// v1.9-q: demotiles.maplibre.org は MapLibre の **デモ用**配信で、公開サイトから
+// 常用してよいものではない。クラスタの数字にしか使わないので、ASCII 範囲
+// (0-255) の 1 ファイルだけを vendor/ へ同梱して自前で配る。
+// フォントは Noto Sans (SIL Open Font License)。
+const GLYPHS = "./vendor/fonts/{fontstack}/{range}.pbf";
+const GLYPH_FONT = ["Noto Sans Regular"];
+
+// v1.6 の SRC_MINZOOM / SRC_MAXZOOM (PMTiles 側のズーム範囲) は DEM_MAXZOOM に置き換えた。
+const MAP_MAXZOOM = 20;
+
+/* --- v1.6 で足した定数 --------------------------------------------------- */
+
+// 等高線レイヤを出し始めるズーム。これ未満では layer が minzoom で隠れるので、
+// **MapLibre は等高線 source に触らず、DEM も 1 枚も取りに行かない** (v1.6 で実測、
+// v1.8-q でも同じ仕組み。v1.6 では PMTiles、v1.8-q では DEM の節約になる)。
+// 16 のまま据え置く理由は v1.6 と同じ:
+//   - 細かい等高線は z15 だと一様な茶色の面になり読めない
+//   - 広域表示では「ため池の点」だけが見えればよい
+//   - ため池を選ぶと詳細ズームへ飛ぶので、詳細表示では必ず出る
+// 16 未満に下げると広域パンのたびに DEM を取りに行くので注意。
+const CONTOUR_MIN_ZOOM = 16;
+
+// ため池を選んだときの詳細表示ズーム。v1.6 は 16 だったが v1.8-q で 18 にした。
+// 動的生成では表示ズームが DEM の分解能を決めるので、v1.6 の 0.5 m 相当の
+// 細かさを出すには z18 (0.47 m/px) が要る (v1.7-q §13.2 の実測)。
+const POND_DETAIL_ZOOM = 18;
+const CLUSTER_MAX_ZOOM = 13;     // これを超えると個別ポイントに分解する
+const CLUSTER_RADIUS = 50;       // クラスタ半径 [px]
+const OVERVIEW_PADDING = 40;     // 全域表示の余白 [px]
+const SEARCH_MAX_RESULTS = 50;   // 検索候補の表示上限 (件数自体は全部数える)
+
+/* --- v1.5 から持ち越した定数 (アルゴリズムごと変更しない) ---------------- */
+const CLICK_TOLERANCE_PX = 6;    // クリック点から等高線までの許容距離 [px]
+const ELEV_EPS = 0.01;           // elev 一致判定の帯 [m]
+const AXIS_MARGIN_PX = 40;       // 測線の端の除外幅 [px]
+const LABEL_MIN_GAP_PX = 16;     // 測線に沿ったラベルの最小間隔 [px]
+const LABEL_MIN_ZOOM = 14;       // これ未満ではラベルを出さない
+const LABEL_QUERY_HALF_PX = 2;   // 交点探索に使う帯の半幅 [px]
+const LABEL_MAX_CANDIDATES = 4000;
+// 測線そのものも広域では意味を持たないので同じズームで隠す (v1.6 で追加)。
+const AXIS_MIN_ZOOM = LABEL_MIN_ZOOM;
+
+/* ========================================================================== */
+
+const Q = new URLSearchParams(location.search);
+const DS_KEY = DATASETS[Q.get("dataset")] ? Q.get("dataset") : DATASET;
+const DS = DATASETS[DS_KEY];
+
+// 動的等高線は source-layer 名を自分で決められるので、1 つに固定する。
+// (v1.6 は PMTiles ごとに contours_0_5m / contours_1m と別名だった)
+const CONTOUR_SOURCE_LAYER = "contours";
+
+/* 海面の 0 m 等高線を描かない (v1.7-q で既定 ON にしたものを踏襲)。
+ * 公式 DEM は海域が alpha=0 でマスク済みなので大半は出ないが、湾内に少し残る。
+ * ため池で意味を持つのは堤体まわりの数 m 以上なので副作用は小さい。
+ * ?zero=1 で描くようにできる (陸域への影響を見比べるため)。 */
+const HIDE_ZERO_CONTOUR = Q.get("zero") !== "1";
+
+const CONTOUR_LAYERS = ["contour-index", "contour-minor"];
+const SELECTED_CONTOUR_LAYER = "contour-selected";
+const CONTOUR_ALL_LAYERS = CONTOUR_LAYERS.concat([SELECTED_CONTOUR_LAYER]);
+const CLUSTER_LAYER = "pond-cluster";
+const CLUSTER_COUNT_LAYER = "pond-cluster-count";
+const POND_LAYER = "pond-point";
+const POND_SELECTED_LAYER = "pond-selected";
+
+const DEBUG = Q.get("debug") === "1";
+const PANES = Q.get("panes") === "1" ? 1 : 2;
+
+// URL に位置の hash が付いていたら、初期表示を全域に上書きしない。
+// ★ Map を作る前に見ること。MapLibre の hash:true は生成直後に自分で
+//   location.hash を書くので、あとで見ると必ず true になってしまう。
+const HAD_HASH = /#\d/.test(location.hash);
+
+const $ = (id) => document.getElementById(id);
+$("h-dataset").textContent = DS.label;
+
+function fmtBytes(n) {
+  if (n === null || n === undefined) return "-";
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i === 0 ? 0 : 1) + " " + u[i];
+}
+function showError(msg) { $("d-err").textContent = msg; }
+
+if (location.protocol === "file:") {
+  const el = $("nodata");
+  el.style.display = "block";
+  el.innerHTML = "<b>HTTP サーバ経由で開いてください</b><br>" +
+    "等高線の生成に Web Worker を使うため <code>file://</code> では動きません<br>" +
+    "(Worker は同一オリジンを要求し、file:// は常に別オリジン扱いになります)。<br>" +
+    "ため池 JSON の fetch も file:// ではブロックされます。<br><br>" +
+    "公開版は次の URL から開いてください。<br>" +
+    "<code>https://yoichifujihara.github.io/pond-viewer-v1.9-q/</code><br><br>" +
+    "<span style=\"opacity:.7\">手元のファイルで動かす場合は、そのフォルダを" +
+    " 静的 HTTP サーバで配信してください (Range 対応は不要です)。</span>";
+  throw new Error("file:// では Web Worker / ため池 JSON を使えません");
+}
+
+/* ==========================================================================
+ * 2. ため池データ — 既存 JSON をそのまま読み、ブラウザ側で GeoJSON にする
+ *
+ * 元 JSON (noto_ponds.json) の形:
+ *   { source, region, count, ponds: [ {name, city, addr, lat, lon,
+ *                                      dam_h, crest, vol, area}, ... ] }
+ * **一意 ID を持たない**ので、読み込み順に pond_id を振る (元ファイルは変更しない)。
+ * 名称は 1,507 件中 1,332 種しかなく、名称+市町+住所でも 1,505 種にしかならない
+ * ため、名称や住所を ID 代わりにしてはいけない。
+ * ========================================================================== */
+
+const PONDS = [];                 // 有効座標のため池だけ (pond_id 付き)
+let pondFC = { type: "FeatureCollection", features: [] };
+let pondBounds = null;            // [[w,s],[e,n]]
+const pondStats = { total: 0, valid: 0, dropped: 0, source: "-" };
+
+const isNum = (v) => typeof v === "number" && isFinite(v);
+
+/** 1 レコードを検査して内部形に直す。座標が使えなければ null。 */
+function normalizePond(raw, id) {
+  if (!raw || typeof raw !== "object") return null;
+  const lat = raw.lat, lon = raw.lon;
+  // 緯度経度の欠損・型違い・地球外の値をここで落とす (ビューアは止めない)
+  if (!isNum(lat) || !isNum(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return {
+    pond_id: id,
+    name: String(raw.name ?? "").trim() || "(名称なし)",
+    city: String(raw.city ?? "").trim(),
+    addr: String(raw.addr ?? "").trim(),
+    lat: lat, lon: lon,
+    dam_h: isNum(raw.dam_h) ? raw.dam_h : null,
+    crest: isNum(raw.crest) ? raw.crest : null,
+    vol:   isNum(raw.vol)   ? raw.vol   : null,
+    area:  isNum(raw.area)  ? raw.area  : null,
+  };
+}
+
+function buildPondData(json) {
+  const list = Array.isArray(json && json.ponds) ? json.ponds : [];
+  pondStats.total = list.length;
+  pondStats.source = (json && json.source) || "-";
+  const dropped = [];
+  let id = 0;
+  for (const raw of list) {
+    const p = normalizePond(raw, id);
+    if (!p) { dropped.push(raw); continue; }
+    PONDS.push(p);
+    id++;
+    // 検索用の小文字キー。全文検索ライブラリは入れない (単純な部分一致で足りる)
+    p._key = (p.name + " " + p.city + " " + p.addr).toLowerCase();
+  }
+  pondStats.valid = PONDS.length;
+  pondStats.dropped = dropped.length;
+
+  pondFC = {
+    type: "FeatureCollection",
+    features: PONDS.map((p) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+      properties: { pond_id: p.pond_id, name: p.name, city: p.city },
+    })),
+  };
+
+  if (PONDS.length) {
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    for (const p of PONDS) {
+      if (p.lon < w) w = p.lon;
+      if (p.lon > e) e = p.lon;
+      if (p.lat < s) s = p.lat;
+      if (p.lat > n) n = p.lat;
+    }
+    pondBounds = [[w, s], [e, n]];
+  }
+
+  // 完成条件 45 / 指示 8: 総数・有効・除外を必ず出す
+  console.log("[v1.6] ponds loaded:"
+    + " total=" + pondStats.total
+    + " valid=" + pondStats.valid
+    + " dropped=" + pondStats.dropped
+    + " source=" + pondStats.source
+    + " bounds=" + JSON.stringify(pondBounds));
+  if (dropped.length) {
+    console.warn("[v1.6] 座標が使えないため除外したレコード (先頭 5 件)", dropped.slice(0, 5));
+  }
+  $("d-ponds").textContent = pondStats.valid + " / " + pondStats.total + " 池";
+  $("s-src").textContent = pondStats.source;
+}
+
+/* ==========================================================================
+ * 3. MapLibre — style と Map の生成 (v1.5 の作りをそのまま踏襲)
+ * ========================================================================== */
+
+/* --- 動的等高線 (v1.8-q の中心。v1.6 の pmtiles.Protocol と入れ替えた) ------
+ * mlcontour.DemSource が
+ *   (1) DEM PNG タイルを取得し
+ *   (2) encoding:"numpng" (地理院方式) で標高にデコードし
+ *   (3) 等高線を計算してベクタタイルにして返す
+ * ところまでを addProtocol 経由で肩代わりする。
+ * MapLibre から見ると「ベクタタイルの source が 1 個ある」だけになる。
+ *
+ * ★ DemSource は **1 個だけ作って左右で共有する**。
+ *   左右の contours source が同じ protocol URL を指していれば、それだけで
+ *   DEM のキャッシュもデコード結果も共有される。v1.7-q の実測では
+ *   共有 = 同一 DEM の二重取得 0 件 / 別々 = 20 件 だった。 */
+let WORKER_ON = Q.get("worker") !== "0";
+let demSource;
+try {
+  demSource = new mlcontour.DemSource({
+    url: DEM_URL, encoding: "numpng", maxzoom: DEM_MAXZOOM,
+    worker: WORKER_ON, cacheSize: 200, timeoutMs: 15000,
+  });
+} catch (e) {
+  // Worker が作れない環境でも等高線だけは出す (UI は止まりやすくなる)
+  console.warn("[v1.8-q] DemSource(worker:true) 失敗 → Worker 無しで再試行:", e);
+  WORKER_ON = false;
+  demSource = new mlcontour.DemSource({
+    url: DEM_URL, encoding: "numpng", maxzoom: DEM_MAXZOOM,
+    worker: false, cacheSize: 200, timeoutMs: 15000,
+  });
+}
+/* ★★ 左右共有でこれを入れないと右画面の等高線が丸ごと消える ★★
+ *
+ * DemSource を 1 個にすると、同じ等高線タイルの ArrayBuffer が
+ * **同一オブジェクトのまま** 左右両方の Map へ渡る
+ * (maplibre-contour の内部キャッシュは 1 本の Promise を全員に返すため)。
+ * MapLibre はタイルの ArrayBuffer を自分の worker へ transfer するので、
+ * 先に受け取った側で detach され、あとの側は
+ *   Failed to execute 'postMessage' on 'Worker':
+ *   ArrayBuffer at index 0 is already detached.
+ * で失敗する。実測 (深田池 z18) では左 274 本 / 右 0 本になった。
+ * 発生はタイミング依存で、キャッシュに載ってから 2 つ目の Map が要求した
+ * ときだけ起きるので、たまたま出ることも出ないこともある。
+ *
+ * ライブラリ側では直せないので、**呼ぶたびにコピーを返す**。
+ * 元のバッファはキャッシュに残したままなので、以後も何度でもコピーを作れる。
+ * コストは 1 タイル数十 KB のメモリコピーで、等高線の生成に比べれば無視できる。
+ *
+ * setupMaplibre() はこの 2 本を addProtocol するだけなので、自分で登録する。 */
+const rawContourProtocol = demSource.contourProtocol;
+function contourProtocolShared(params, abortController) {
+  return Promise.resolve(rawContourProtocol(params, abortController)).then((res) => {
+    if (!res || !res.data || typeof res.data.byteLength !== "number") return res;
+    return Object.assign({}, res, { data: res.data.slice(0) });
+  });
+}
+maplibregl.addProtocol(demSource.sharedDemProtocolId, demSource.sharedDemProtocol);
+maplibregl.addProtocol(demSource.contourProtocolId, contourProtocolShared);
+
+$("d-worker").textContent = WORKER_ON ? "有効" : "無効";
+
+/** 等高線タイルの protocol URL。左右で同じ文字列を使うこと (共有の条件)。 */
+function contourUrl(dsKey) {
+  return demSource.contourProtocolUrl({
+    multiplier: 1,                        // DEM は m 単位なのでそのまま
+    thresholds: DATASETS[dsKey].thresholds,
+    /* ★ v1.6 との接続点。maplibre-contour の既定は ele / level だが、
+     *   v1.6 の PMTiles は elev / is_index だった。名前を合わせておくことで
+     *   v1.6 の IS_INDEX / selectedContourFilter / nearestContour /
+     *   水位スライダ / 測線ラベルが **1 行も直さずに動く**。 */
+    elevationKey: "elev",
+    levelKey: "is_index",                 // 0 = 通常等高線 / 1 以上 = 主曲線
+    contourLayer: CONTOUR_SOURCE_LAYER,
+    overzoom: 0,                          // DEM が 256px なので等高線タイル z = DEM タイル z
+    buffer: 1,                            // 隣タイルへ 1px はみ出して継ぎ目を消す
+  });
+}
+const CONTOUR_TILE_URL = contourUrl(DS_KEY);
+
+/** そのズームで実際に使われている [通常, 主曲線] の間隔 [m]。
+ *  thresholds 表は「そのズーム以下で最大のキー」が使われる規則なので、それを引く。
+ *  v1.6 では PMTiles の feature 自身が interval 属性を持っていたが (0.5 か 1 の
+ *  固定値)、動的等高線は持たない。ズームで変わるので表から引き直す。 */
+function contourIntervals(z) {
+  const th = DATASETS[DS_KEY].thresholds;
+  const keys = Object.keys(th).map(Number).sort((a, b) => a - b);
+  let best = keys[0];
+  for (const k of keys) if (k <= z) best = k;
+  return th[best];
+}
+
+const IS_INDEX = ["any",
+  ["==", ["get", "is_index"], true],
+  ["==", ["get", "is_index"], 1],
+  ["==", ["get", "is_index"], "true"]];
+const isIndexOf = (p) => p.is_index === true || p.is_index === 1 || p.is_index === "true";
+
+/* 標高 0 m の線だけを落とす filter 部品 (v1.8-q)。
+ * 等高線データ自体は加工しないので、?zero=1 ですぐ見比べられる。 */
+const NOT_ZERO = ["!=", ["get", "elev"], 0];
+/** 通常線 / 主曲線の filter。0 m を落とすかどうかだけが可変。 */
+function contourFilter(isIndexLayer) {
+  const base = isIndexLayer ? IS_INDEX : ["!", IS_INDEX];
+  return HIDE_ZERO_CONTOUR ? ["all", base, NOT_ZERO] : base;
+}
+
+const ATTRIB =
+  '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院タイル</a>' +
+  ' / 林野庁 能登地域2024 DEM (PDL1.0) / 農業用ため池一覧' +
+  ' / 等高線生成: maplibre-contour (numpng 対応版, BSD-3-Clause)';
+
+/** 選択水位 v の等高線だけを通す filter (v1.5 と同じ。feature-state は使わない)。 */
+function selectedContourFilter(v) {
+  if (v === null) return ["==", ["get", "elev"], -99999];
+  return ["all", [">=", ["get", "elev"], v - ELEV_EPS],
+                 ["<=", ["get", "elev"], v + ELEV_EPS]];
+}
+
+/** 選択ため池だけを通す filter。pond_id は読み込み時に振った内部 ID。 */
+function selectedPondFilter(id) {
+  return ["all", ["!", ["has", "point_count"]],
+                 ["==", ["get", "pond_id"], id === null ? -1 : id]];
+}
+
+function buildStyle(basemapKey) {
+  const b = BASEMAPS[basemapKey];
+  return {
+    version: 8,
+    glyphs: GLYPHS,
+    sources: {
+      basemap: {
+        type: "raster", tiles: [b.url || BASEMAPS.gsi_std.url], tileSize: 256,
+        minzoom: 0, maxzoom: BASEMAP_MAXZOOM, attribution: ATTRIB,
+      },
+      /* 動的等高線。左右とも同じ CONTOUR_TILE_URL を指すので DemSource が共有される。
+       * maxzoom を DEM_MAXZOOM にしておくと、z18 より寄っても新しい DEM を
+       * 取りに行かず z18 の等高線タイルを拡大して使う。
+       * bounds を入れておくと能登の外へパンしても範囲外を要求しない (404 対策)。 */
+      contours: {
+        type: "vector",
+        tiles: [CONTOUR_TILE_URL],
+        minzoom: CONTOUR_MIN_ZOOM,
+        maxzoom: DEM_MAXZOOM,
+        bounds: DEM_BOUNDS,
+      },
+      // ため池。データは fetch 後に setData で入れる (style を作り直さない)。
+      ponds: {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+        cluster: true,
+        clusterMaxZoom: CLUSTER_MAX_ZOOM,
+        clusterRadius: CLUSTER_RADIUS,
+      },
+    },
+    layers: [
+      { id: "basemap", type: "raster", source: "basemap",
+        layout: { visibility: b.url ? "visible" : "none" } },
+
+      /* --- 等高線 (v1.5 と同じ描き分け + minzoom。色も線幅もそのまま) ----
+       * minzoom を入れておくと、それ未満のズームでは layer が隠れ、
+       * MapLibre はこの source のタイルを取りに行かない。広域表示で
+       * DEM に 1 枚も触らないのはこの 1 行で成立している。 */
+      {
+        id: "contour-minor", type: "line", source: "contours", "source-layer": CONTOUR_SOURCE_LAYER,
+        minzoom: CONTOUR_MIN_ZOOM,
+        filter: contourFilter(false),
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#c2703c", "line-opacity": 0.85,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.4, 14, 0.6, 16, 0.9, 20, 1.6],
+        },
+      },
+      {
+        id: "contour-index", type: "line", source: "contours", "source-layer": CONTOUR_SOURCE_LAYER,
+        minzoom: CONTOUR_MIN_ZOOM,
+        filter: contourFilter(true),
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#8a3b0b", "line-opacity": 0.95,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.9, 14, 1.4, 16, 2.0, 20, 3.4],
+        },
+      },
+      {
+        id: SELECTED_CONTOUR_LAYER, type: "line", source: "contours",
+        "source-layer": CONTOUR_SOURCE_LAYER, minzoom: CONTOUR_MIN_ZOOM,
+        filter: selectedContourFilter(null),
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#00e5ff", "line-opacity": 1.0,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 11, 1.8, 14, 2.6, 16, 3.6, 20, 5.5],
+        },
+      },
+
+      /* --- ため池 (等高線より上。広域ではこれだけが見える) --------------- */
+      {
+        id: CLUSTER_LAYER, type: "circle", source: "ponds",
+        filter: ["has", "point_count"],
+        paint: {
+          "circle-color": "#1d4ed8", "circle-opacity": 0.72,
+          "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.5,
+          "circle-radius": ["step", ["get", "point_count"], 13, 20, 18, 100, 24, 400, 30],
+        },
+      },
+      {
+        id: CLUSTER_COUNT_LAYER, type: "symbol", source: "ponds",
+        filter: ["has", "point_count"],
+        layout: {
+          "text-field": ["get", "point_count_abbreviated"],
+          "text-font": GLYPH_FONT, "text-size": 12, "text-allow-overlap": true,
+        },
+        paint: { "text-color": "#ffffff" },
+      },
+      {
+        id: POND_LAYER, type: "circle", source: "ponds",
+        filter: ["!", ["has", "point_count"]],
+        paint: {
+          "circle-color": "#1d4ed8", "circle-opacity": 0.9,
+          "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.2,
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 3, 13, 4.5, 16, 6, 20, 8],
+        },
+      },
+      {
+        id: POND_SELECTED_LAYER, type: "circle", source: "ponds",
+        filter: selectedPondFilter(null),
+        paint: {
+          "circle-color": "#f59e0b", "circle-opacity": 1.0,
+          "circle-stroke-color": "#7c2d12", "circle-stroke-width": 2.5,
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 6, 13, 8, 16, 11, 20, 14],
+        },
+      },
+    ],
+  };
+}
+
+function makeMap(container, basemapKey, useHash) {
+  const map = new maplibregl.Map({
+    container: container,
+    style: buildStyle(basemapKey),
+    center: [136.987, 37.078],       // 能登のだいたいの中心 (ため池 bounds が来たら上書き)
+    zoom: 9,
+    maxZoom: MAP_MAXZOOM,
+    bearing: 0, pitch: 0, maxPitch: 0,
+    dragRotate: false, pitchWithRotate: false, touchPitch: false,
+    hash: useHash,
+    attributionControl: { compact: true },
+  });
+  map.touchZoomRotate.disableRotation();
+  map.keyboard.disableRotation();
+  map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-left");
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
+  map.on("error", (e) => {
+    showError("MapLibre: " + (e && e.error ? e.error.message : "unknown error"));
+  });
+  return map;
+}
+
+const mapL = makeMap("mapL", BASE_L_DEFAULT, true);
+const mapR = PANES === 2 ? makeMap("mapR", BASE_R_DEFAULT, false) : null;
+const MAPS = mapR ? [mapL, mapR] : [mapL];
+
+if (PANES === 1) {
+  $("paneR").querySelector(".pane-label").textContent = "右 (1画面計測のため無効)";
+  $("panesBtn").textContent = "2画面へ戻す";
+  $("baseR").disabled = true;
+}
+$("d-panes").textContent = PANES + " 画面";
+
+/* --------------------------------------------------------------------------
+ * 左右同期 — center と zoom だけ (v1.4 / v1.5 から一切変えていない)。
+ * 池へ飛ぶときも「左だけ動かして右はこれで追従させる」ので、
+ * animation が二重に走らない (指示 21)。
+ * -------------------------------------------------------------------------- */
+let syncing = false;
+function link(src, dst) {
+  src.on("move", () => {
+    if (syncing) return;
+    syncing = true;
+    dst.jumpTo({ center: src.getCenter(), zoom: src.getZoom(), bearing: 0, pitch: 0 });
+    syncing = false;
+  });
+}
+if (mapR) {
+  mapR.jumpTo({ center: mapL.getCenter(), zoom: mapL.getZoom() });
+  link(mapL, mapR);
+  link(mapR, mapL);
+}
+
+/* --------------------------------------------------------------------------
+ * ペイン単位の状態 (v1.5 と同じ。測線・ラベル・同期カーソルの入れ物)
+ * -------------------------------------------------------------------------- */
+function makePane(map, side, overlayId) {
+  const ov = $(overlayId);
+  const axisV = document.createElement("div"); axisV.className = "axis axis-v";
+  const axisH = document.createElement("div"); axisH.className = "axis axis-h";
+  const axisC = document.createElement("div"); axisC.className = "axis-c";
+  const labels = document.createElement("div");
+  labels.style.cssText = "position:absolute;inset:0;";
+  const ghost = document.createElement("div"); ghost.className = "ghost";
+  ov.append(axisV, axisH, axisC, labels, ghost);
+  return { map, side, ov, axisV, axisH, axisC, labels, ghost,
+           sig: "", dirty: true, nLabels: 0 };
+}
+const paneL = makePane(mapL, "左", "ovL");
+const paneR = mapR ? makePane(mapR, "右", "ovR") : null;
+const PANES_ARR = paneR ? [paneL, paneR] : [paneL];
+
+/* ==========================================================================
+ * 4. ため池の選択 — 検索からでも地図クリックからでも必ずここを通す (指示 39)
+ * ========================================================================== */
+
+let selectedPond = null;          // PONDS の要素そのもの (null = 未選択)
+
+const fmtVal = (v, unit, dec) =>
+  (v === null || v === undefined) ? "-"
+    : (dec != null ? Number(v).toFixed(dec) : String(v)) + (unit || "");
+
+function renderPondPanel() {
+  const el = $("panel-pond");
+  if (!selectedPond) {
+    el.style.display = "none";
+    $("s-pond").textContent = "未選択";
+    return;
+  }
+  const p = selectedPond;
+  el.style.display = "block";
+  $("p-name").textContent = p.name;
+  $("p-addr").textContent = (p.city + " " + p.addr).trim() || "-";
+  // 単位は v1.1 Leaflet 版のポップアップと同じにしてある
+  $("p-dam").textContent   = fmtVal(p.dam_h, " m", 1);
+  $("p-crest").textContent = fmtVal(p.crest, " m", 0);
+  $("p-vol").textContent   = fmtVal(p.vol, " 千m³", 1);
+  $("p-area").textContent  = fmtVal(p.area, " km²", 4);
+  $("s-pond").textContent = p.name + (p.city ? " (" + p.city + ")" : "");
+}
+
+function applyPondHighlight() {
+  const id = selectedPond ? selectedPond.pond_id : null;
+  for (const m of MAPS) {
+    if (m.getLayer(POND_SELECTED_LAYER)) {
+      m.setFilter(POND_SELECTED_LAYER, selectedPondFilter(id));
+    }
+  }
+}
+
+/**
+ * ため池を選ぶ。検索結果クリックも地図上のポイントクリックもこれを呼ぶ。
+ *   selectedPond 設定 -> 水位 Reset -> 強調 -> 情報表示 -> 地図移動
+ * 水位を必ず落とすのは、前の池の水位が残ると別の池の標高として誤読されるため
+ * (指示 22)。
+ */
+function selectPond(pond, opts) {
+  if (!pond) return;
+  const move = !(opts && opts.move === false);
+  selectedPond = pond;
+  setWaterLevel(null);            // 前の池の水位は必ず捨てる
+  applyPondHighlight();
+  renderPondPanel();
+  console.log("[v1.6] selectPond:", { pond_id: pond.pond_id, name: pond.name,
+    city: pond.city, lat: pond.lat, lon: pond.lon, move: move });
+  if (move) {
+    // 左だけ動かす。右は link() の move ハンドラが jumpTo で追従するので、
+    // animation が 2 本走らない。
+    mapL.flyTo({ center: [pond.lon, pond.lat], zoom: POND_DETAIL_ZOOM,
+                 bearing: 0, pitch: 0, duration: 900, essential: true });
+  }
+}
+
+/** 選択を解いて能登全域へ戻す (指示 28 / 40)。 */
+function clearPondSelection(opts) {
+  const move = !(opts && opts.move === false);
+  selectedPond = null;
+  setWaterLevel(null);
+  applyPondHighlight();
+  renderPondPanel();
+  console.log("[v1.6] clearPondSelection: move=" + move);
+  if (move) fitOverview();
+}
+
+/** ため池 bounds へ寄せる。実データから求めた bounds を使う (指示 9)。 */
+function fitOverview(opts) {
+  if (!pondBounds) return false;
+  mapL.fitBounds(pondBounds, {
+    padding: OVERVIEW_PADDING, bearing: 0, pitch: 0,
+    duration: (opts && opts.duration != null) ? opts.duration : 700,
+  });
+  return true;
+}
+
+$("homeBtn").onclick = () => clearPondSelection();
+
+/* ==========================================================================
+ * 5. ため池検索 — 単純な部分一致だけ (全文検索ライブラリは入れない)
+ * ========================================================================== */
+
+function searchPonds(term) {
+  const q = term.trim().toLowerCase();
+  if (!q) return { hits: [], total: 0 };
+  const hits = [];
+  let total = 0;
+  for (const p of PONDS) {
+    // 名称を最優先。見つからなければ市町・住所も見る (指示 16)
+    const inName = p.name.toLowerCase().indexOf(q) >= 0;
+    if (!inName && p._key.indexOf(q) < 0) continue;
+    total++;
+    if (hits.length < SEARCH_MAX_RESULTS) hits.push({ p, inName });
+  }
+  // 名称に当たったものを先に出す
+  hits.sort((a, b) => (b.inName - a.inName) || a.p.name.localeCompare(b.p.name, "ja"));
+  return { hits: hits.map((h) => h.p), total };
+}
+
+function renderResults(term) {
+  const box = $("results");
+  const { hits, total } = searchPonds(term);
+  $("qCount").textContent = term.trim() ? total + " 件" : "";
+  // position:fixed なので、検索欄の今の位置に合わせる (topbar は横スクロールする)
+  box.style.left = Math.round($("q").getBoundingClientRect().left) + "px";
+  if (!term.trim()) { box.style.display = "none"; box.innerHTML = ""; return; }
+  if (!total) {
+    box.innerHTML = '<div class="none">該当なし</div>';
+    box.style.display = "block";
+    return;
+  }
+  // 同名の池が 81 種あるので、名称だけでは選べない。市町と住所を必ず添える。
+  let html = hits.map((p) =>
+    '<div class="r" data-id="' + p.pond_id + '">' +
+      '<span class="nm">' + esc(p.name) + '</span>' +
+      '<div class="sub">' + esc((p.city + " " + p.addr).trim() || "住所不明") + '</div>' +
+    '</div>').join("");
+  if (total > hits.length) {
+    html += '<div class="more">ほか ' + (total - hits.length) + ' 件 (上位 '
+          + SEARCH_MAX_RESULTS + ' 件のみ表示)</div>';
+  }
+  box.innerHTML = html;
+  box.style.display = "block";
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+$("q").addEventListener("input", (e) => renderResults(e.target.value));
+$("q").addEventListener("focus", (e) => { if (e.target.value) renderResults(e.target.value); });
+$("results").addEventListener("click", (e) => {
+  const row = e.target.closest(".r");
+  if (!row) return;
+  const p = PONDS[Number(row.dataset.id)];
+  if (p) {
+    selectPond(p);
+    $("results").style.display = "none";
+  }
+});
+// 画面のどこかを押したら候補を閉じる (検索欄自身を除く)
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#searchWrap")) $("results").style.display = "none";
+});
+
+/* ==========================================================================
+ * 6. 水位 — v1.5 のまま。左右で 1 つの共有状態
+ * ========================================================================== */
+
+let selectedWaterLevel = null;
+const fmtElev = (v) => (typeof v === "number" ? v : parseFloat(v)).toFixed(2);
+
+function setWaterLevel(v) {
+  selectedWaterLevel = v;
+  $("wl").textContent = (v === null) ? "未選択" : fmtElev(v) + " m";
+  for (const m of MAPS) {
+    if (m.getLayer(SELECTED_CONTOUR_LAYER)) {
+      m.setFilter(SELECTED_CONTOUR_LAYER, selectedContourFilter(v));
+    }
+  }
+  markSelectedLabels();
+}
+$("clearWL").onclick = () => setWaterLevel(null);
+
+/* --------------------------------------------------------------------------
+ * 幾何ヘルパ (v1.5 から変更なし)
+ * -------------------------------------------------------------------------- */
+function linesOf(geom) {
+  if (!geom) return [];
+  if (geom.type === "LineString") return [geom.coordinates];
+  if (geom.type === "MultiLineString") return geom.coordinates;
+  return [];
+}
+function pointSegDist2(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const l2 = dx * dx + dy * dy;
+  let t = l2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
+  if (t < 0) t = 0; else if (t > 1) t = 1;
+  const ex = px - (ax + t * dx), ey = py - (ay + t * dy);
+  return ex * ex + ey * ey;
+}
+
+/** クリック点にいちばん近い等高線 Feature (v1.5 の要。絶対に戻さない)。
+ *  候補取得 -> 全線分との画面距離 -> 最短。レイヤ順では選ばない。 */
+function nearestContour(map, pt) {
+  const R = CLICK_TOLERANCE_PX;
+  const feats = map.queryRenderedFeatures(
+    [[pt.x - R, pt.y - R], [pt.x + R, pt.y + R]], { layers: CONTOUR_LAYERS });
+  let best = null, bestD2 = Infinity;
+  for (const f of feats) {
+    for (const line of linesOf(f.geometry)) {
+      if (!line.length) continue;
+      let prev = map.project(line[0]);
+      if (line.length === 1) {
+        const ex = pt.x - prev.x, ey = pt.y - prev.y;
+        const d2 = ex * ex + ey * ey;
+        if (d2 < bestD2) { bestD2 = d2; best = f; }
+        continue;
+      }
+      for (let i = 1; i < line.length; i++) {
+        const cur = map.project(line[i]);
+        const d2 = pointSegDist2(pt.x, pt.y, prev.x, prev.y, cur.x, cur.y);
+        if (d2 < bestD2) { bestD2 = d2; best = f; }
+        prev = cur;
+      }
+    }
+  }
+  const dist = best ? Math.sqrt(bestD2) : Infinity;
+  return { feature: (best && dist <= CLICK_TOLERANCE_PX) ? best : null,
+           dist: dist, candidates: feats.length };
+}
+
+/* ==========================================================================
+ * 7. クリック — 1 回のクリックで 1 つのことだけ起こす (指示 53)
+ *
+ *   クラスタ  -> そのクラスタが開くところまでズーム
+ *   ため池    -> ため池を選ぶ
+ *   等高線    -> 水位を読む
+ *
+ * 上から順に見て、当たったところで return する。ため池の当たり判定は
+ * 描画されている円の大きさそのまま (e.point) なので、等高線の 6px 判定を
+ * 横取りするのはマーカーの上だけ。
+ * ========================================================================== */
+
+function bindClick(pane) {
+  const map = pane.map;
+  let popup = null;
+  map.on("click", (e) => {
+    // 1) クラスタ
+    const cl = map.queryRenderedFeatures(e.point, { layers: [CLUSTER_LAYER] });
+    if (cl.length) {
+      const src = map.getSource("ponds");
+      src.getClusterExpansionZoom(cl[0].properties.cluster_id).then((z) => {
+        // 左だけ動かす (右は同期で追従)
+        mapL.easeTo({ center: cl[0].geometry.coordinates, zoom: z,
+                      bearing: 0, pitch: 0, duration: 500 });
+      }).catch(() => {});
+      return;
+    }
+    // 2) 個別ため池
+    const pf = map.queryRenderedFeatures(e.point,
+      { layers: [POND_SELECTED_LAYER, POND_LAYER] });
+    if (pf.length) {
+      const p = PONDS[pf[0].properties.pond_id];
+      if (p) selectPond(p);
+      return;
+    }
+    // 3) 等高線 -> 水位 (v1.5 と同じ)
+    const hit = nearestContour(map, e.point);
+    console.log("[v1.6] nearest contour (" + pane.side + "):"
+      + " candidates=" + hit.candidates
+      + " elev=" + (hit.feature ? fmtElev(hit.feature.properties.elev) : "-")
+      + " distance=" + (isFinite(hit.dist) ? hit.dist.toFixed(1) : "-") + "px"
+      + " is_index=" + (hit.feature ? isIndexOf(hit.feature.properties) : "-"));
+    if (!hit.feature) return;
+
+    const p = hit.feature.properties;
+    setWaterLevel(typeof p.elev === "number" ? p.elev : parseFloat(p.elev));
+    if (popup) popup.remove();
+    popup = new maplibregl.Popup({ closeButton: true, maxWidth: "240px" })
+      .setLngLat(e.lngLat)
+      .setHTML("<b>水位: " + fmtElev(p.elev) + " m</b><br>" +
+               (isIndexOf(p) ? "計曲線" : "主曲線") + " / interval "
+                 + contourIntervals(map.getZoom())[isIndexOf(p) ? 1 : 0] + " m<br>" +
+               "クリックからの距離 " + hit.dist.toFixed(1) + " px")
+      .addTo(map);
+  });
+
+  // カーソル形状。ため池・クラスタは「押せる」ことを見せる
+  for (const id of [CLUSTER_LAYER, POND_LAYER, POND_SELECTED_LAYER].concat(CONTOUR_LAYERS)) {
+    map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
+  }
+}
+for (const p of PANES_ARR) bindClick(p);
+
+/* ==========================================================================
+ * 8. 中央測線と標高ラベル — v1.5 のアルゴリズムそのまま (指示 23)
+ * ========================================================================== */
+
+let axisDir = "both";
+const axisShow = (d) => axisDir === d || axisDir === "both";
+
+function segCrossings(pts, c, lo, hi, vertical) {
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const da = (vertical ? a.x : a.y) - c;
+    const db = (vertical ? b.x : b.y) - c;
+    if (da === 0 && db === 0) continue;
+    if ((da > 0) === (db > 0) && da !== 0 && db !== 0) continue;
+    const t = (da === db) ? 0 : da / (da - db);
+    if (t < 0 || t > 1) continue;
+    const x = a.x + t * (b.x - a.x);
+    const y = a.y + t * (b.y - a.y);
+    const key = vertical ? y : x;
+    if (key >= lo && key <= hi) out.push({ x, y, key, ang: Math.atan2(b.y - a.y, b.x - a.x) });
+  }
+  return out;
+}
+
+function collectHits(map, W, H, vertical, indexOnly) {
+  const c = Math.round((vertical ? W : H) / 2);
+  const lo = AXIS_MARGIN_PX, hi = (vertical ? H : W) - AXIS_MARGIN_PX;
+  const q = LABEL_QUERY_HALF_PX;
+  const box = vertical ? [[c - q, lo], [c + q, hi]] : [[lo, c - q], [hi, c + q]];
+  const feats = map.queryRenderedFeatures(box, { layers: CONTOUR_LAYERS });
+
+  const hits = [];
+  const seen = new Set();
+  for (const f of feats) {
+    const idx = isIndexOf(f.properties);
+    if (indexOnly && !idx) continue;
+    const elev = typeof f.properties.elev === "number"
+      ? f.properties.elev : parseFloat(f.properties.elev);
+    for (const line of linesOf(f.geometry)) {
+      if (line.length < 2) continue;
+      const pts = line.map((p) => map.project(p));
+      for (const cr of segCrossings(pts, c, lo, hi, vertical)) {
+        const k = elev.toFixed(2) + "@" + Math.round(cr.key / 2);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        let ang = cr.ang * 180 / Math.PI;
+        if (ang > 90) ang -= 180; else if (ang < -90) ang += 180;
+        hits.push({ key: cr.key, x: cr.x, y: cr.y, elev, idx, ang });
+      }
+    }
+  }
+  return { hits, nFeat: feats.length };
+}
+
+/** 測線ごとの間引きが終わったあと、**縦と横の交差点付近**で重なるものを落とす。
+ *
+ *  thinHits() は 1 本の測線に沿った間隔しか見ない (縦は y、横は x)。
+ *  画面中央では 2 本の測線が交わるので、縦のラベルと横のラベルが数 px の
+ *  距離で並ぶことがある (1m 版で実際に起きた)。ここだけ 2 次元距離で見る。
+ *  同じ測線どうしは x か y が測線位置で揃っているので、この pass では落ちない。
+ */
+function dropCrossOverlaps(kept) {
+  const placed = [], out = [];
+  // 計曲線を先に置いて、ぶつかったら主曲線を捨てる
+  const order = kept.slice().sort((a, b) => (b.idx - a.idx));
+  for (const h of order) {
+    if (placed.some((q) => Math.hypot(q.x - h.x, q.y - h.y) < LABEL_MIN_GAP_PX)) continue;
+    placed.push(h);
+    out.push(h);
+  }
+  return out;
+}
+
+/** 縦と横は必ず別々に呼ぶこと (key が縦=y / 横=x なので混ぜると消し合う)。 */
+function thinHits(hits) {
+  hits.sort((p, q) => p.key - q.key);
+  const placed = [];
+  const fits = (h) => placed.every((k) => Math.abs(k - h.key) >= LABEL_MIN_GAP_PX);
+  const out = [];
+  for (const pass of [true, false]) {
+    for (const h of hits) {
+      if (h.idx !== pass) continue;
+      if (!fits(h)) continue;
+      placed.push(h.key);
+      out.push(h);
+    }
+  }
+  return out;
+}
+
+function labelHtml(h) {
+  const sel = selectedWaterLevel !== null &&
+              Math.abs(h.elev - selectedWaterLevel) <= ELEV_EPS;
+  const cls = "ct-label" + (h.idx ? " idx" : "") + (sel ? " sel" : "");
+  return '<span class="' + cls + '" data-elev="' + h.elev.toFixed(2) + '" style="left:'
+    + h.x.toFixed(1) + 'px;top:' + h.y.toFixed(1) + 'px;transform:translate(-50%,-50%) rotate('
+    + h.ang.toFixed(1) + 'deg)">' + (Math.round(h.elev * 100) / 100) + '</span>';
+}
+
+function markSelectedLabels() {
+  for (const p of PANES_ARR) {
+    for (const el of p.labels.querySelectorAll(".ct-label")) {
+      const v = parseFloat(el.dataset.elev);
+      el.classList.toggle("sel", selectedWaterLevel !== null &&
+                                 Math.abs(v - selectedWaterLevel) <= ELEV_EPS);
+    }
+  }
+}
+
+/** 測線の見た目。広域 (z < AXIS_MIN_ZOOM) では線ごと隠す。
+ *  広域はため池を探す画面で、画面中央の標高を読む意味が無いため (指示 29)。 */
+function layoutAxes(pane, W, H) {
+  const on = axisDir !== "none" && pane.map.getZoom() >= AXIS_MIN_ZOOM;
+  pane.axisV.style.display = on && axisShow("v") ? "block" : "none";
+  pane.axisH.style.display = on && axisShow("h") ? "block" : "none";
+  pane.axisC.style.display = on && axisDir === "both" ? "block" : "none";
+  pane.axisV.style.top = AXIS_MARGIN_PX + "px";
+  pane.axisV.style.height = Math.max(0, H - 2 * AXIS_MARGIN_PX) + "px";
+  pane.axisH.style.left = AXIS_MARGIN_PX + "px";
+  pane.axisH.style.width = Math.max(0, W - 2 * AXIS_MARGIN_PX) + "px";
+}
+
+function refreshPane(pane) {
+  const map = pane.map;
+  const cv = map.getCanvas();
+  const W = cv.clientWidth, H = cv.clientHeight;
+  layoutAxes(pane, W, H);
+
+  if (axisDir === "none" || map.getZoom() < LABEL_MIN_ZOOM) {
+    pane.labels.innerHTML = "";
+    pane.nLabels = 0;
+    return 0;
+  }
+  const t0 = performance.now();
+  const dirs = [];
+  if (axisShow("v")) dirs.push(true);
+  if (axisShow("h")) dirs.push(false);
+
+  let indexOnly = false, kept = [], nFeat = 0, nCross = 0;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    kept = []; nFeat = 0; nCross = 0;
+    for (const vertical of dirs) {
+      const r = collectHits(map, W, H, vertical, indexOnly);
+      nFeat += r.nFeat;
+      nCross += r.hits.length;
+      kept.push(...thinHits(r.hits));
+    }
+    if (indexOnly || nFeat <= LABEL_MAX_CANDIDATES) break;
+    indexOnly = true;
+  }
+  if (dirs.length > 1) kept = dropCrossOverlaps(kept);   // 交差点付近の重なり
+  pane.labels.innerHTML = kept.map(labelHtml).join("");
+  pane.nLabels = kept.length;
+  const ms = performance.now() - t0;
+  if (DEBUG) {
+    console.log("[v1.6] axis labels (" + pane.side + "): features=" + nFeat
+      + " crossings=" + nCross + " labels=" + kept.length
+      + (indexOnly ? " (計曲線のみ)" : "") + " " + ms.toFixed(1) + "ms");
+  }
+  return ms;
+}
+
+function refreshAxisLabels() {
+  for (const p of PANES_ARR) refreshPane(p);
+  $("d-lbl").textContent = PANES_ARR.map((p) => p.nLabels).join(" / ");
+}
+
+function viewSig(map) {
+  const c = map.getCenter(), cv = map.getCanvas();
+  return c.lng.toFixed(7) + "," + c.lat.toFixed(7) + "," + map.getZoom().toFixed(4)
+       + "," + cv.clientWidth + "x" + cv.clientHeight;
+}
+for (const p of PANES_ARR) {
+  p.map.on("movestart", () => { p.labels.innerHTML = ""; p.nLabels = 0; p.dirty = true; });
+  p.map.on("sourcedata", (e) => {
+    if (e.sourceId === "contours" && e.isSourceLoaded) p.dirty = true;
+  });
+  p.map.on("idle", () => {
+    const sig = viewSig(p.map);
+    if (!p.dirty && sig === p.sig) return;
+    p.sig = sig; p.dirty = false;
+    refreshPane(p);
+    $("d-lbl").textContent = PANES_ARR.map((q) => q.nLabels).join(" / ");
+  });
+}
+$("axisDir").onchange = (e) => { axisDir = e.target.value; refreshAxisLabels(); };
+
+/* ==========================================================================
+ * 9. 同期カーソル (v1.5 から変更なし)
+ * ========================================================================== */
+function bindGhostCursor(from, to) {
+  from.map.on("mousemove", (e) => {
+    $("cursorPos").textContent = e.lngLat.lat.toFixed(6) + ", " + e.lngLat.lng.toFixed(6);
+    const q = to.map.project(e.lngLat);
+    to.ghost.style.left = q.x + "px";
+    to.ghost.style.top = q.y + "px";
+    to.ghost.style.display = "block";
+  });
+  from.map.on("mouseout", () => { to.ghost.style.display = "none"; });
+}
+if (paneR) {
+  bindGhostCursor(paneL, paneR);
+  bindGhostCursor(paneR, paneL);
+} else {
+  mapL.on("mousemove", (e) => {
+    $("cursorPos").textContent = e.lngLat.lat.toFixed(6) + ", " + e.lngLat.lng.toFixed(6);
+  });
+}
+
+window.addEventListener("resize", () => {
+  for (const m of MAPS) m.resize();
+  for (const p of PANES_ARR) p.dirty = true;
+  refreshAxisLabels();
+});
+
+/* ==========================================================================
+ * 10. 背景地図・画面数 (v1.5 から変更なし)
+ * ========================================================================== */
+function fillBaseSelect(sel, current) {
+  for (const [key, b] of Object.entries(BASEMAPS)) {
+    const o = document.createElement("option");
+    o.value = key; o.textContent = b.label; o.selected = (key === current);
+    sel.appendChild(o);
+  }
+}
+function setBasemap(map, key) {
+  const b = BASEMAPS[key];
+  if (!b.url) { map.setLayoutProperty("basemap", "visibility", "none"); return; }
+  map.setLayoutProperty("basemap", "visibility", "visible");
+  map.getSource("basemap").setTiles([b.url]);
+}
+fillBaseSelect($("baseL"), BASE_L_DEFAULT);
+fillBaseSelect($("baseR"), BASE_R_DEFAULT);
+$("baseL").onchange = (e) => setBasemap(mapL, e.target.value);
+$("baseR").onchange = (e) => { if (mapR) setBasemap(mapR, e.target.value); };
+
+$("panesBtn").onclick = () => {
+  const q = new URLSearchParams(location.search);
+  if (PANES === 2) q.set("panes", "1"); else q.delete("panes");
+  const qs = q.toString();
+  location.href = location.pathname + (qs ? "?" + qs : "") + location.hash;
+};
+
+/* ==========================================================================
+ * 11. ため池 JSON の読み込み — style が出来てから setData する
+ * ========================================================================== */
+
+let pondsReady = false;
+
+function pushPondsToMaps() {
+  let n = 0;
+  for (const m of MAPS) {
+    const src = m.getSource("ponds");
+    if (src) { src.setData(pondFC); n++; }
+  }
+  return n;
+}
+
+/** ponds source に setData できる状態になるまで待つ。
+ *  ★ map.isStyleLoaded() で待ってはいけない。あれは style だけでなく
+ *    「全 source が読み終わったか」まで見るので、重い source (v1.6 は PMTiles、
+ *    v1.8-q は動的等高線) を抱えているとなかなか true にならず、ここで止まる。
+ *    欲しいのは「style の JSON が入って getSource できるか」だけ。 */
+function whenSourceReady(map) {
+  if (map.getSource("ponds")) return Promise.resolve();
+  return new Promise((res) => {
+    const h = () => {
+      if (!map.getSource("ponds")) return;
+      map.off("styledata", h);
+      res();
+    };
+    map.on("styledata", h);
+  });
+}
+
+(async function loadPonds() {
+  try {
+    const res = await fetch(POND_JSON_URL, { cache: "no-cache" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const json = await res.json();
+    buildPondData(json);
+  } catch (err) {
+    // ため池が読めなくても等高線・水位・測線は使えるようにしておく
+    console.error("[v1.6] ため池 JSON を読めません:", POND_JSON_URL, err);
+    $("d-ponds").textContent = "読込失敗";
+    $("d-ponds").className = "ng";
+    showError("ため池 JSON を読めません: " + err.message + "\n" + POND_JSON_URL +
+              "\n(等高線・水位・測線は使えます)");
+    return;
+  }
+  try {
+    await Promise.all(MAPS.map((m) => whenSourceReady(m)));
+    const n = pushPondsToMaps();
+    pondsReady = true;
+    if (!HAD_HASH) fitOverview({ duration: 0 });   // 初期表示は能登全域
+    console.log("[v1.6] ponds pushed to " + n + " map(s), overview="
+                + (!HAD_HASH) + " (hash=" + HAD_HASH + ")");
+    window.__pondsReady = true;                    // 自動確認用の目印
+  } catch (err) {
+    console.error("[v1.6] ため池を地図へ載せられません:", err);
+    showError("ため池を地図へ載せられません: " + err);
+  }
+})();
+
+/* ==========================================================================
+ * 12. 診断 (v1.5 から。等高線の出し分け状態を出すようにした)
+ * ========================================================================== */
+function updateZoom() {
+  const z = mapL.getZoom();
+  $("d-zoom").textContent = z.toFixed(2);
+  const st = $("d-zstate");
+  if (z < CONTOUR_MIN_ZOOM) {
+    st.className = "warn";
+    st.textContent = "非表示 (z" + CONTOUR_MIN_ZOOM + " 未満)";
+  } else if (z > DEM_MAXZOOM) {
+    st.className = "ok"; st.textContent = "z" + DEM_MAXZOOM + " をオーバーズーム";
+  } else {
+    st.className = "ok"; st.textContent = "実タイル";
+  }
+}
+mapL.on("zoom", updateZoom);
+mapL.on("load", updateZoom);
+
+const seenFirstIdle = new Set();
+let tMove = 0, pendingMove = false;
+function allIdle() { return MAPS.every((m) => m.loaded() && !m.isMoving() && !m.isZooming()); }
+for (const m of MAPS) {
+  m.on("movestart", () => { if (!pendingMove) { tMove = performance.now(); pendingMove = true; } });
+  m.on("idle", () => {
+    seenFirstIdle.add(m);
+    if (seenFirstIdle.size === MAPS.length && $("d-first").textContent === "計測中...") {
+      $("d-first").textContent = (performance.now() - T0).toFixed(0) + " ms";
+    }
+    if (pendingMove && allIdle()) {
+      pendingMove = false;
+      $("d-idle").textContent = (performance.now() - tMove).toFixed(0) + " ms";
+    }
+  });
+}
+
+/* --- 等高線 / DEM の計測 (v1.8-q) ----------------------------------------
+ * v1.6 は PerformanceObserver で PMTiles の Range リクエストを数えていた。
+ * v1.8-q では DEM の fetch が **Web Worker の中**で起きるので、
+ * メインスレッドの PerformanceObserver には出てこない。
+ * 代わりに DemSource の onTiming を使う (等高線タイル 1 枚ごとに 1 回来る)。
+ *
+ * ★ 注意: timing.resources はブラウザ HTTP キャッシュに当たると空になる。
+ *   「DEM 取得 (網)」はあくまで実際に網に出た分で、
+ *   「取り直しの有無」の判定には使えない (CDP の Network で数えること)。
+ *   逆に「DEM 参照 (延べ) >> DEM 取得 (網)」であれば、
+ *   DemSource のキャッシュと左右共有が効いていることを意味する。 */
+const fetched = { req: 0, demref: 0, net: 0, fail: 0, aborted: 0 };
+const demUrlsSeen = new Set();
+function renderFetched() {
+  $("d-req").textContent = fetched.req + " 枚";
+  $("d-demref").textContent = fetched.demref + " 枚";
+  $("d-net").textContent = demUrlsSeen.size + " 枚 / " + fmtBytes(fetched.net);
+  const fe = $("d-cache");
+  fe.textContent = fetched.fail + " 枚 (中断 " + fetched.aborted + ")";
+  fe.className = fetched.fail ? "ng" : "";
+}
+renderFetched();
+
+/* DEM 取得失敗のユーザー表示 (指示 22-24 節)。
+ *
+ * ★ 判定に onTiming の error を使ってはいけない。あれは「等高線タイルの生成が
+ *   完走しなかった」としか言っておらず、地図を動かしたときに MapLibre が
+ *   保留中のタイルを **取り消した** 場合も同じ true になる。実測では、
+ *   ため池へ飛ぶ操作 1 回で 12 件立ち、帯が一瞬出て消えた。
+ *   ユーザーに見せる判定は MapLibre 自身の error イベントで行う。MapLibre は
+ *   abort を握りつぶし、本当に失敗したタイルだけを上げてくる。
+ *
+ * 単発の失敗では出さない。DEM 有効範囲外の 404 は正常な挙動として扱う
+ * (source の bounds でほぼ抑えているが、タイル縁のはみ出しでは起こりうる)。
+ *
+ * 出す条件は 2 つを **同時に** 満たしたときだけ:
+ *   (1) 連続 DEM_FAIL_STREAK_LIMIT 回失敗している
+ *   (2) いま画面に等高線が 1 本も描けていない
+ * (2) を入れてあるのは、「実際に表示対象範囲で等高線が取得できない場合に
+ * 限定する」ため。キャッシュ済みのタイルで表示できているなら警告は要らない。
+ * 逆に、失敗が止んでも新しいタイルを作る操作をしないかぎり成功の合図は
+ * 来ないので、(2) を見ないと帯が出たまま残る (実測で踏んだ)。 */
+const DEM_FAIL_STREAK_LIMIT = 4;
+let demFailStreak = 0, demWarnShown = false;
+function setDemWarn(on, why) {
+  if (on === demWarnShown) return;
+  demWarnShown = on;
+  $("demwarn").style.display = on ? "block" : "none";
+  if (on) console.error("[v1.8-q] 等高線データを取得できません:", why);
+  else console.info("[v1.8-q] 等高線の取得が回復しました");
+}
+/** いま等高線が描けているか。描けていれば警告は要らない。 */
+function contoursVisible() {
+  if (mapL.getZoom() < CONTOUR_MIN_ZOOM) return true;   // そもそも出さない場面
+  return MAPS.some((m) => m.queryRenderedFeatures({ layers: CONTOUR_LAYERS }).length > 0);
+}
+/** 表示の実態を見て帯の要否を決め直す。失敗時と idle のたびに呼ぶ。 */
+function reviewDemWarn(why) {
+  if (contoursVisible()) {
+    demFailStreak = 0;
+    setDemWarn(false);
+  } else if (demFailStreak >= DEM_FAIL_STREAK_LIMIT) {
+    setDemWarn(true, why || (demFailStreak + " 連続失敗"));
+  }
+  const el = $("d-range");
+  if (demWarnShown) { el.className = "ng"; el.textContent = "NG (連続失敗 " + demFailStreak + ")"; }
+}
+function noteContourOk() {
+  demFailStreak = 0;
+  setDemWarn(false);
+}
+function noteContourFail(why) {
+  fetched.fail++;
+  demFailStreak++;
+  console.warn("[v1.8-q] 等高線タイルを取得できません (" + demFailStreak + " 連続):", why);
+  if (demFailStreak >= DEM_FAIL_STREAK_LIMIT) reviewDemWarn(why);
+  renderFetched();
+}
+
+// 生成の実績と DEM の参照量。数えるだけで、警告は出さない。
+demSource.onTiming((t) => {
+  if (!t) return;
+  fetched.req++;
+  fetched.demref += t.tilesUsed || 0;
+  for (const r of (t.resources || [])) {
+    if (r && r.name) demUrlsSeen.add(r.name);
+    fetched.net += (r && r.transferSize) || 0;
+  }
+  if (t.error) fetched.aborted++; else noteContourOk();
+  renderFetched();
+});
+
+// 本当に取れなかったタイルだけがここへ来る。
+for (const m of MAPS) {
+  m.on("error", (e) => {
+    if (e && e.sourceId === "contours") {
+      noteContourFail((e.error && e.error.message) || e.error || "不明");
+    }
+  });
+  // 描画が落ち着くたびに、表示の実態を見て帯の要否を決め直す。
+  m.on("idle", () => reviewDemWarn());
+}
+
+$("resetBtn").onclick = () => {
+  fetched.req = fetched.demref = fetched.net = fetched.fail = fetched.aborted = 0;
+  demUrlsSeen.clear();
+  demFailStreak = 0;
+  performance.clearResourceTimings();
+  renderFetched();
+};
+
+/* 起動時に DEM へ 1 枚だけ当てて、接続と CORS を確かめる。
+ * v1.6 の「Range 対応」チェックの置き換え。DEM_BOUNDS の中心の z11 タイルを使う
+ * (中心なら必ず存在するので、404 = 範囲外 と混ざらない)。 */
+(async function checkDem() {
+  const el = $("d-range");
+  const z = 11, n = 1 << z;
+  const lon = (DEM_BOUNDS[0] + DEM_BOUNDS[2]) / 2;
+  const lat = (DEM_BOUNDS[1] + DEM_BOUNDS[3]) / 2;
+  const x = Math.floor((lon + 180) / 360 * n);
+  const rad = lat * Math.PI / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
+  const url = DEM_URL.replace("{z}", z).replace("{x}", x).replace("{y}", y);
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (res.ok) {
+      const buf = await res.arrayBuffer();
+      el.className = "ok";
+      el.textContent = "OK (" + fmtBytes(buf.byteLength) + ")";
+      console.info("[v1.8-q] DEM 接続確認 OK:", url);
+    } else {
+      el.className = "ng"; el.textContent = "NG (HTTP " + res.status + ")";
+      setDemWarn(true, "DEM HTTP " + res.status + " " + url);
+      showError("DEM タイルを取得できません (HTTP " + res.status + ")\n" + url);
+    }
+  } catch (err) {
+    // ここで落ちるのは大半が CORS かネットワーク断。等高線以外は動かせる。
+    el.className = "ng"; el.textContent = "NG (取得失敗)";
+    setDemWarn(true, err && err.message);
+    showError("DEM タイルを取得できません: " + (err && err.message) + "\n" + url);
+  }
+})();
+</script>
+</body>
+</html>
