@@ -1416,14 +1416,15 @@ for (const m of MAPS) {
  *   「取り直しの有無」の判定には使えない (CDP の Network で数えること)。
  *   逆に「DEM 参照 (延べ) >> DEM 取得 (網)」であれば、
  *   DemSource のキャッシュと左右共有が効いていることを意味する。 */
-const fetched = { req: 0, demref: 0, net: 0, fail: 0, aborted: 0 };
+const fetched = { req: 0, demref: 0, net: 0, fail: 0, aborted: 0, outside: 0 };
 const demUrlsSeen = new Set();
 function renderFetched() {
   $("d-req").textContent = fetched.req + " 枚";
   $("d-demref").textContent = fetched.demref + " 枚";
   $("d-net").textContent = demUrlsSeen.size + " 枚 / " + fmtBytes(fetched.net);
   const fe = $("d-cache");
-  fe.textContent = fetched.fail + " 枚 (中断 " + fetched.aborted + ")";
+  fe.textContent = fetched.fail + " 枚 (範囲外 " + fetched.outside
+                 + " / 中断 " + fetched.aborted + ")";
   fe.className = fetched.fail ? "ng" : "";
 }
 renderFetched();
@@ -1437,8 +1438,15 @@ renderFetched();
  *   ユーザーに見せる判定は MapLibre 自身の error イベントで行う。MapLibre は
  *   abort を握りつぶし、本当に失敗したタイルだけを上げてくる。
  *
- * 単発の失敗では出さない。DEM 有効範囲外の 404 は正常な挙動として扱う
- * (source の bounds でほぼ抑えているが、タイル縁のはみ出しでは起こりうる)。
+ * ★★ DEM 有効範囲外の 404 は「失敗」に数えない (指示 24 節) ★★
+ *   source の bounds は能登の **外接矩形**でしかない。その内側でも、
+ *   半島の形から外れた海上などは DEM が存在せず 404 になる。これは異常ではない。
+ *   v1.9-q の 30 分ストレス試験で、ランダムなパンが海上へ流れるたびに
+ *   404 が 4 回続き、帯が 14 回出た。「配信元は正常なのに障害と表示する」
+ *   のは誤りなので、404 だけは別に数えて警告の材料にしない。
+ *   通信断・CORS・5xx は今までどおり失敗として数える。
+ *
+ * 単発の失敗では出さない。
  *
  * 出す条件は 2 つを **同時に** 満たしたときだけ:
  *   (1) 連続 DEM_FAIL_STREAK_LIMIT 回失敗している
@@ -1476,7 +1484,17 @@ function noteContourOk() {
   demFailStreak = 0;
   setDemWarn(false);
 }
+/** DEM が存在しない場所か (範囲外)。配信元の異常ではない。 */
+function isOutOfRange(why) {
+  return /\b404\b/.test(String(why == null ? "" : why));
+}
 function noteContourFail(why) {
+  if (isOutOfRange(why)) {
+    // 範囲外。連続失敗にも数えないので、海上へパンしても帯は出ない。
+    fetched.outside++;
+    renderFetched();
+    return;
+  }
   fetched.fail++;
   demFailStreak++;
   console.warn("[v1.8-q] 等高線タイルを取得できません (" + demFailStreak + " 連続):", why);
@@ -1509,7 +1527,8 @@ for (const m of MAPS) {
 }
 
 $("resetBtn").onclick = () => {
-  fetched.req = fetched.demref = fetched.net = fetched.fail = fetched.aborted = 0;
+  fetched.req = fetched.demref = fetched.net = 0;
+  fetched.fail = fetched.aborted = fetched.outside = 0;
   demUrlsSeen.clear();
   demFailStreak = 0;
   performance.clearResourceTimings();
