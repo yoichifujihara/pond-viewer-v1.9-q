@@ -21,8 +21,13 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
           background:var(--bar); color:#fff; font-size:13px; white-space:nowrap;
           overflow-x:auto; overflow-y:visible; position:relative; z-index:30; }
 #topbar b { font-size:15px; }
-/* v1.9-q: 版の補助表示。主タイトルより小さく、控えめにする (指示 6 節) */
-#topbar .ver { font-size:11px; opacity:.72; margin-left:6px; align-self:center; }
+/* v1.9-q: 名称と版の表示 (指示 6 節)。
+ * 主タイトルと補助表示を **縦に積む**。横に並べると上部バーが 1400px で
+ * 溢れて右端のボタンが切れる (実測)。積めば幅は主タイトルぶんで済み、
+ * 44px の高さにも収まる。補助表示は主タイトルより小さく、控えめにする。 */
+#topbar .brand { display:flex; flex-direction:column; justify-content:center;
+                 line-height:1.15; }
+#topbar .brand .ver { font-size:10px; opacity:.7; font-weight:normal; }
 #topbar label { display:flex; align-items:center; gap:4px; }
 #topbar select, #topbar button, #topbar input {
   font:inherit; font-size:12px; padding:2px 6px; border-radius:4px;
@@ -139,7 +144,7 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 <body>
 
 <div id="topbar">
-  <b>ため池災害前後比較ビューア 試行版</b><span class="ver">GitHub Pages 試験運用版 v1.9-q</span>
+  <span class="brand"><b>ため池災害前後比較ビューア 試行版</b><span class="ver">GitHub Pages 試験運用版 v1.9-q</span></span>
   <span class="ds">等高線: <span id="h-dataset">-</span></span>
   <span id="searchWrap">
     <input id="q" type="search" placeholder="ため池名で検索" autocomplete="off">
