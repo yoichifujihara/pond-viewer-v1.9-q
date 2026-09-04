@@ -3,9 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ため池災害前後比較ビューア 試行版 | v1.9-q</title>
+<title>ため池災害前後比較ビューア 試行版 | v1.9.1-q</title>
 <!-- v1.9-q: 外部 CDN (unpkg) をやめ、MapLibre GL JS 5.24.0 を vendor/ へ同梱した。
-     公開サイトの表示を自分たちの管理下に置くため。LICENSE も同梱している。 -->
+     公開サイトの表示を自分たちの管理下に置くため。LICENSE も同梱している。
+
+     v1.9.1-q: 解析機能は増やさず、**見やすさと操作性だけ**を直した版。
+     (1) 左画面の初期背景をオルソ(電子国土基本図)へ
+     (2) 等高線の表示 ON/OFF と色 3 パターン
+     (3) 診断パネルを既定で折りたたみ
+     (4) 左右それぞれ独立した明るさ調整 (背景ラスタだけに効く)
+     (5) 右画面に地理院の 2024/1/2・1/5・1/14 撮影画像を追加
+     v1.9-q は凍結したまま。ここは別リポジトリの別ツリー。 -->
 <link rel="stylesheet" href="./vendor/maplibre-gl.css">
 <style>
 :root { --bar:#1e2a38; --fg:#f2f2f2; --panel:rgba(24,26,30,0.88);
@@ -35,6 +43,13 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 #topbar select, #topbar button { cursor:pointer; }
 #topbar .ds { color:#9fb0c0; }
 #topbar .spacer { margin-left:auto; }
+/* v1.9.1-q: 等高線の ON/OFF と色 (指示 7 節)。
+ * 上部バーは 1400px で 1384px まで詰まっていた (v1.9-q §14-1)。ここに
+ * チェックボックスと色の select を足すぶん、状態表示でしかない
+ * 「等高線: 0.5 m 間隔」を下のステータスバーへ移して幅を空けている。 */
+#topbar .grp { display:flex; align-items:center; gap:5px; }
+#topbar input[type="checkbox"] { width:14px; height:14px; padding:0; margin:0;
+  accent-color:var(--accent); cursor:pointer; }
 
 /* ---- ため池検索 (技術検証用の最小 UI) ----------------------------------- */
 #searchWrap { position:relative; }
@@ -96,17 +111,161 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 #panel-pond dt { color:#9fb0c0; }
 #panel-pond dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
 
-/* ---- 診断パネル (v1.5 から。ため池の行を足した) ------------------------- */
+/* ---- 診断パネル (v1.5 から。ため池の行を足した) -------------------------
+ * v1.9.1-q: 既定で折りたたむ (指示 13-17 節)。常時展開だと右画面の右上
+ * 262px を地図から奪い続ける。診断の中身は 1 行も削っていない。
+ * 初期状態は必ずチップ。異常時も自動では展開しない (指示 17 節)。 */
+#diag-chip { position:absolute; z-index:5; top:8px; right:8px;
+  font:inherit; font-size:12px; line-height:1.4; padding:3px 9px; cursor:pointer;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  border-radius:6px; backdrop-filter:blur(4px);
+  box-shadow:0 2px 8px rgba(0,0,0,0.3); }
+#diag-chip .mk { font-weight:700; color:#86efac; }
+#diag-chip.alert { border-color:#fcd34d; }
+#diag-chip.alert .mk { color:#fcd34d; }
 #panel-diag { position:absolute; z-index:5; top:8px; right:8px; width:262px;
   background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
   padding:9px 11px; font-size:12px; line-height:1.55; backdrop-filter:blur(4px);
-  box-shadow:0 4px 16px rgba(0,0,0,0.35); }
+  box-shadow:0 4px 16px rgba(0,0,0,0.35); display:none; }
+#panel-diag.open { display:block; }
 #panel-diag .panel-title { font-weight:700; letter-spacing:.04em; color:var(--accent);
   margin:0 0 5px; padding-bottom:4px; border-bottom:1px solid var(--line);
   display:flex; align-items:center; gap:6px; }
+#panel-diag .panel-title .ttl { cursor:pointer; }
 #panel-diag .panel-title button {
-  font:inherit; font-size:10px; padding:1px 6px; margin-left:auto; cursor:pointer;
+  font:inherit; font-size:10px; padding:1px 6px; cursor:pointer;
   color:var(--fg); background:rgba(255,255,255,0.08); border:1px solid var(--line); border-radius:4px; }
+/* 「計測リセット」だけを右へ押し出す。「閉じる」はその隣に並ぶ。 */
+#panel-diag .panel-title button:first-of-type { margin-left:auto; }
+
+/* ---- v1.9.1-q: 左右独立の明るさ (指示 18-27 節 / 修正指示で方式変更) ------
+ *
+ * ★★ 明るさは canvas への CSS filter:brightness() でかける ★★
+ *   最初は指示 22・23 節に従って背景ラスタ layer の
+ *   raster-brightness-min / -max だけを動かしていた。等高線やため池に
+ *   影響しない点は良かったが、**見え方が求めていたものと違った**。
+ *   min を上げるのは「黒そのものを灰色へ持ち上げる」操作なので、暗部が
+ *   白っぽくなってコントラストが落ちる。
+ *   基準として示された Leaflet 版 (_probe/brightness_reference.html) は
+ *       tilePane.style.filter = `brightness(${b}%)`
+ *   で、黒は黒のまま・暗部が倍率で持ち上がり・明部は白へ飽和する。
+ *   修正指示によりこちらを正とした。
+ *
+ *   MapLibre は等高線・ため池・クラスタの数字も同じ canvas に描くので、
+ *   それらも明るさの影響を受ける。**第一段階ではこれを許容する**
+ *   (修正指示 8・14 節)。分ける必要が出たら canvas を分ける。
+ *
+ *   canvas の外にある DOM — 上部バー / 診断 / ため池情報 / 明るさ操作 /
+ *   ステータスバー / 測線と標高ラベル (.overlay) / MapLibre のコントロール類 —
+ *   には一切かからない。
+ *
+ *   transition は基準版と同じ 0.1s。パン・ズームは canvas の中身の描き替えで
+ *   filter 値は変わらないので、transition が走るのはスライダ操作のときだけ。 */
+.maplibregl-canvas { transition: filter 0.1s ease-out; }
+
+/* 置き場所は各ペインの左下 (指示 20 節の第一候補)。
+ * ★ bottom は 38px では足りない。MapLibre の attribution は compact 指定でも
+ *   展開すると **ペインの幅いっぱいの帯** になり (実測 671 x 44px / 2 行)、
+ *   ScaleControl ごとその中に入る。38px だとチップが出典表示の先頭
+ *   「出典: 国土地理…」に重なって隠してしまう (実測 1008 px^2)。
+ *   出典は簡略化も遮蔽もしてはいけないので、帯の上へ逃がす。
+ *   84px は 3 行に折り返しても (高さ 66px) 重ならない高さ。
+ *   この重なりは check_pondatlas_cdp.py の Q 節で毎回測っている。 */
+/* ★ 追加指示 4 節: **初期状態は展開**。小さなチップだけだと
+ *   「明るさを変えられること自体に気づかない」という指摘があったため。
+ *   最小化すると元のチップに戻る。開閉は左右独立 (追加指示 6 節)。
+ *   .bright は bottom を固定してあるので、展開しても下端が動かず
+ *   出典の帯とぶつからない。 */
+.bright { position:absolute; z-index:7; left:8px; bottom:84px; }
+.bright-chip { font:inherit; font-size:12px; line-height:1.4; padding:3px 9px; cursor:pointer;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  border-radius:6px; backdrop-filter:blur(4px); box-shadow:0 2px 8px rgba(0,0,0,0.3);
+  font-variant-numeric:tabular-nums; }
+.bright-chip.on { border-color:var(--accent); color:var(--accent); }
+.bright-chip[disabled] { opacity:.45; cursor:default; }
+.bright.open .bright-chip { display:none; }
+.bright-pop { width:214px; display:none;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
+  padding:8px 10px; font-size:12px; line-height:1.5; backdrop-filter:blur(4px);
+  box-shadow:0 4px 16px rgba(0,0,0,0.4); }
+.bright.open .bright-pop { display:block; }
+.bright-pop .cap { display:flex; align-items:center; gap:6px;
+  color:#9fb0c0; font-size:11px; margin-bottom:4px; }
+.bright-pop .cap .val { color:var(--fg); font-size:12px; }
+.bright-pop input[type="range"] { width:100%; margin:0; accent-color:var(--accent); }
+.bright-pop .row { display:flex; align-items:center; gap:8px; margin-top:5px; }
+.bright-pop .val { font-variant-numeric:tabular-nums; font-weight:700; }
+.bright-pop button { font:inherit; font-size:11px; padding:2px 8px; margin-left:auto;
+  cursor:pointer; color:var(--fg); background:rgba(255,255,255,0.08);
+  border:1px solid var(--line); border-radius:4px; }
+/* 最小化ボタン。タイトル行の右端。 */
+.bright-pop .mini { padding:0 6px; line-height:1.5; font-size:13px; }
+/* ---- v1.9.1-q 追加: 外部 XYZ タイルの追加ダイアログ (追加指示 15 節) -------
+ * 右画面だけの機能。一般利用者が「名前 + URL」だけで足せることを最優先する。
+ * ユーザーの入力文字列は **innerHTML へ入れない**。表示は textContent か
+ * value で行う (追加指示 30 節)。 */
+#tileDlgBack { position:fixed; inset:0; z-index:60; display:none;
+  background:rgba(0,0,0,0.45); backdrop-filter:blur(2px); }
+#tileDlgBack.open { display:block; }
+#tileDlg { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:min(560px, calc(100vw - 32px)); max-height:calc(100vh - 48px); overflow-y:auto;
+  background:#1b2430; color:var(--fg); border:1px solid var(--line); border-radius:10px;
+  box-shadow:0 16px 48px rgba(0,0,0,0.6); font-size:13px; line-height:1.6; }
+#tileDlg h2 { margin:0; padding:12px 16px; font-size:15px; border-bottom:1px solid var(--line);
+  display:flex; align-items:center; gap:8px; }
+#tileDlg h2 button { margin-left:auto; font:inherit; font-size:16px; line-height:1;
+  padding:2px 8px; cursor:pointer; color:var(--fg); background:transparent;
+  border:1px solid var(--line); border-radius:4px; }
+#tileDlg .body { padding:14px 16px; }
+#tileDlg label.f { display:block; margin:0 0 10px; }
+#tileDlg label.f > span { display:block; font-size:12px; color:#9fb0c0; margin-bottom:3px; }
+#tileDlg input[type="text"], #tileDlg input[type="number"] {
+  width:100%; font:inherit; font-size:13px; padding:5px 8px; border-radius:5px;
+  border:1px solid #55697e; background:#101823; color:#fff; }
+#tileDlg .hint { font-size:11px; color:#9fb0c0; margin:-6px 0 10px; word-break:break-all; }
+#tileDlg .err { display:none; margin:0 0 10px; padding:7px 10px; border-radius:5px;
+  background:rgba(150,30,30,0.35); border:1px solid #b45; color:#ffd9d9; font-size:12px; }
+#tileDlg .err.on { display:block; }
+#tileDlg details { margin:2px 0 12px; }
+#tileDlg details summary { cursor:pointer; color:var(--accent); font-size:12px; }
+#tileDlg .adv { display:flex; gap:10px; margin-top:8px; }
+#tileDlg .adv label.f { flex:0 0 90px; margin:0; }
+#tileDlg .adv label.f.wide { flex:1 1 auto; }
+#tileDlg .sample { border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+  background:rgba(255,255,255,0.04); margin:4px 0 12px; }
+#tileDlg .sample .t { font-weight:700; color:var(--accent); margin-bottom:4px; }
+#tileDlg .sample dl { display:grid; grid-template-columns:auto 1fr; gap:1px 10px;
+  margin:0 0 8px; font-size:12px; }
+#tileDlg .sample dt { color:#9fb0c0; }
+#tileDlg .sample dd { margin:0; word-break:break-all; }
+#tileDlg .sample a { color:var(--accent); }
+#tileDlg .notes { font-size:11px; color:#9fb0c0; margin:10px 0 0; }
+#tileDlg .foot { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
+#tileDlg .foot button { font:inherit; font-size:13px; padding:5px 14px; border-radius:5px;
+  border:1px solid #55697e; background:#2b3a4c; color:#fff; cursor:pointer; }
+#tileDlg .foot .primary { margin-left:auto; background:var(--accent); color:#0b1620;
+  border-color:var(--accent); font-weight:700; }
+#tileDlg .list { border-top:1px solid var(--line); padding:12px 16px; }
+#tileDlg .list h3 { margin:0 0 8px; font-size:13px; color:#9fb0c0; font-weight:700; }
+#tileDlg .list .row { display:flex; align-items:center; gap:8px; padding:5px 0;
+  border-bottom:1px solid rgba(255,255,255,0.07); }
+#tileDlg .list .row .nm { flex:1 1 auto; min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+#tileDlg .list .row .u { display:block; font-size:11px; color:#9fb0c0;
+  overflow:hidden; text-overflow:ellipsis; }
+#tileDlg .list .row button { font:inherit; font-size:11px; padding:2px 8px; border-radius:4px;
+  border:1px solid var(--line); background:rgba(255,255,255,0.08); color:var(--fg);
+  cursor:pointer; flex:0 0 auto; }
+#tileDlg .list .empty { color:#9fb0c0; font-size:12px; }
+
+/* 外部タイルが続けて取れないときの控えめな案内 (追加指示 51-54 節)。
+   DEM の帯 (#demwarn) とは別物。混ぜない。 */
+#tilewarn { position:absolute; z-index:45; left:50%; top:54px; transform:translateX(-50%);
+  background:rgba(120,90,20,0.94); color:#fff; padding:6px 14px; border-radius:6px;
+  font-size:12px; line-height:1.5; display:none; max-width:92%;
+  box-shadow:0 2px 8px rgba(0,0,0,0.35); }
+#tilewarn span { display:block; font-size:11px; opacity:.85; }
+
 #panel-diag dl { display:grid; grid-template-columns:auto 1fr; gap:0 8px; margin:0; }
 #panel-diag dt { color:#9fb0c0; }
 #panel-diag dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
@@ -144,17 +303,32 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 <body>
 
 <div id="topbar">
-  <span class="brand"><b>ため池災害前後比較ビューア 試行版</b><span class="ver">GitHub Pages 試験運用版 v1.9-q</span></span>
-  <span class="ds">等高線: <span id="h-dataset">-</span></span>
+  <span class="brand"><b>ため池災害前後比較ビューア 試行版</b><span class="ver">GitHub Pages 試験運用版 v1.9.1-q</span></span>
   <span id="searchWrap">
     <input id="q" type="search" placeholder="ため池名で検索" autocomplete="off">
     <span id="qCount"></span>
     <div id="results"></div>
   </span>
   <button id="homeBtn">全域へ戻る</button>
-  <label>左背景: <select id="baseL"></select></label>
-  <label>右背景: <select id="baseR"></select></label>
-  <label>測線: <select id="axisDir">
+  <!-- ★ autocomplete="off" は必須。付けないと Chrome が再読み込み時に
+       「前回選んでいた値」へ勝手に戻すので、**select の表示と地図の中身が
+       食い違う**。外部タイルを追加したあと再読み込みすると、地図は既定の背景
+       なのに select だけ追加地図を指した状態になって踏んだ。 -->
+  <span class="grp"><label for="ctOn">等高線</label>
+    <input id="ctOn" type="checkbox" checked autocomplete="off" title="等高線の表示 ON/OFF">
+    <select id="ctColor" autocomplete="off" title="等高線の色">
+      <option value="std" selected>標準</option>
+      <option value="white">白</option>
+      <option value="black">黒</option>
+    </select></span>
+  <!-- v1.9.1-q 追加: 「左背景:」「右背景:」から「左:」「右:」へ縮めた。
+       ＋外部タイル を足したぶん上部バーが 1400px で 4px 溢れたため
+       (v1.9-q §14-1 と同じ罠。overflow-x:auto なので崩れず気づけない)。
+       すぐ隣の select に地図名が出るので、これで意味は通る。 -->
+  <label title="左画面の背景地図">左: <select id="baseL" autocomplete="off"></select></label>
+  <label title="右画面の背景地図">右: <select id="baseR" autocomplete="off"></select></label>
+  <button id="tileAddBtn" title="右画面へ外部のXYZタイルを追加する">＋ 外部タイル</button>
+  <label>測線: <select id="axisDir" autocomplete="off">
     <option value="both" selected>両方</option>
     <option value="v">縦</option>
     <option value="h">横</option>
@@ -179,13 +353,29 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
         <dt>満水面積</dt><dd id="p-area">-</dd>
       </dl>
     </div>
+    <div class="bright open" id="brightL">
+      <button type="button" class="bright-chip" id="brightChipL" aria-expanded="true"
+              title="左画面の明るさ">☀ <span id="brightValL">100</span>%</button>
+      <div class="bright-pop">
+        <div class="cap">☀ 明るさ <span class="val" id="brightNumL">100%</span>
+          <button type="button" class="mini" id="brightMinL"
+                  title="最小化" aria-label="左の明るさを最小化">－</button></div>
+        <input type="range" id="brightRangeL" min="0" max="500" step="1" value="100"
+               aria-label="左画面の明るさ">
+        <div class="row"><span style="color:#9fb0c0;font-size:11px">左画面だけに効きます</span>
+          <button type="button" id="brightResetL">標準に戻す</button></div>
+      </div>
+    </div>
   </div>
   <div class="pane" id="paneR">
     <div class="pane-label">右</div>
     <div id="mapR" class="map"></div>
     <div class="overlay" id="ovR"></div>
+    <button type="button" id="diag-chip" aria-expanded="false"
+            title="正常。押すと詳細">診断 <span class="mk" id="diag-mark">✓</span> ▸</button>
     <div id="panel-diag">
-      <div class="panel-title">診断 <button id="resetBtn">計測リセット</button></div>
+      <div class="panel-title"><span class="ttl" id="diag-title" title="押すと折りたたむ">診断</span>
+        <button id="resetBtn">計測リセット</button><button id="diagClose">閉じる</button></div>
       <dl>
         <dt>画面数</dt><dd id="d-panes">-</dd>
         <dt>ズーム</dt><dd id="d-zoom">-</dd>
@@ -200,8 +390,24 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
         <dt>初期表示</dt><dd id="d-first">計測中...</dd>
         <dt>直前の再描画</dt><dd id="d-idle">-</dd>
         <dt>測線ラベル 左/右</dt><dd id="d-lbl">-</dd>
+        <dt>背景タイル</dt><dd id="d-bm">-</dd>
       </dl>
       <div id="d-err"></div>
+    </div>
+    <div id="tilewarn">この外部タイルを表示できませんでした。
+      <span>URL、表示範囲、Zoom、または配信元の設定を確認してください。</span></div>
+    <div class="bright open" id="brightR">
+      <button type="button" class="bright-chip" id="brightChipR" aria-expanded="true"
+              title="右画面の明るさ">☀ <span id="brightValR">100</span>%</button>
+      <div class="bright-pop">
+        <div class="cap">☀ 明るさ <span class="val" id="brightNumR">100%</span>
+          <button type="button" class="mini" id="brightMinR"
+                  title="最小化" aria-label="右の明るさを最小化">－</button></div>
+        <input type="range" id="brightRangeR" min="0" max="500" step="1" value="100"
+               aria-label="右画面の明るさ">
+        <div class="row"><span style="color:#9fb0c0;font-size:11px">右画面だけに効きます</span>
+          <button type="button" id="brightResetR">標準に戻す</button></div>
+      </div>
     </div>
   </div>
 </div>
@@ -211,6 +417,7 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
   <span>選択池: <b id="s-pond">未選択</b></span>
   <span>水位: <b id="wl">未選択</b></span>
   <button id="clearWL">水位解除</button>
+  <span>等高線: <span id="h-dataset">-</span></span>
   <span id="cursorPos"></span>
   <span class="src">出典: 国土地理院タイル / 林野庁 能登地域2024 DEM (PDL1.0) / ため池: <span id="s-src">-</span>
     / 等高線生成: maplibre-contour (numpng 対応版, BSD-3-Clause)</span>
@@ -219,12 +426,88 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 <div id="nodata"></div>
 <div id="demwarn">等高線データを取得できません。<span>地図とため池の表示は使えます (詳細は console)</span></div>
 
+<!-- 外部 XYZ タイルの追加 (追加指示 15-23・31-33・45-47・55-56 節) -->
+<div id="tileDlgBack" role="dialog" aria-modal="true" aria-labelledby="tileDlgTitle">
+  <div id="tileDlg">
+    <h2 id="tileDlgTitle">外部タイルを追加
+      <button type="button" id="tileDlgClose" aria-label="閉じる">×</button></h2>
+    <div class="body">
+      <div class="err" id="tileErr"></div>
+      <label class="f"><span>地図の名前</span>
+        <input type="text" id="tileName" maxlength="60" autocomplete="off"
+               placeholder="例: 2024能登半島豪雨 9/23 輪島"></label>
+      <label class="f"><span>タイルURL</span>
+        <input type="text" id="tileUrl" autocomplete="off" spellcheck="false"
+               placeholder="https://example.jp/{z}/{x}/{y}.png"></label>
+      <p class="hint">例：https://example.jp/{z}/{x}/{y}.png</p>
+
+      <details id="tileAdv">
+        <summary>詳細設定</summary>
+        <div class="adv">
+          <label class="f"><span>最小Zoom</span>
+            <input type="number" id="tileMinZ" min="0" max="24" step="1" value="0"></label>
+          <label class="f"><span>最大Zoom</span>
+            <input type="number" id="tileMaxZ" min="0" max="24" step="1" value="18"></label>
+          <label class="f wide"><span>出典</span>
+            <input type="text" id="tileAttr" maxlength="120" autocomplete="off"
+                   placeholder="例: 国土地理院"></label>
+        </div>
+      </details>
+
+      <div class="sample">
+        <div class="t">入力例：2024年 能登半島豪雨</div>
+        <dl>
+          <dt>正式なデータ名</dt>
+          <dd>令和6年9月20日からの大雨<br>輪島地区 正射画像（速報）2024年9月23日撮影</dd>
+          <dt>提供範囲</dt><dd>珠洲市・輪島市・能登町</dd>
+          <dt>ズーム</dt><dd>10 〜 18</dd>
+          <dt>提供元</dt><dd>国土地理院</dd>
+        </dl>
+        <button type="button" id="tileSampleBtn"
+                style="font:inherit;font-size:12px;padding:3px 10px;border-radius:5px;
+                       border:1px solid var(--accent);background:rgba(125,211,252,.15);
+                       color:var(--accent);cursor:pointer">この例を入力</button>
+        <p class="notes" style="margin-top:8px">
+          押すと上の入力欄に値が入ります。<b>この時点ではまだ地図に追加されません。</b>
+          内容を確かめてから「追加」を押してください。<br>
+          <a href="https://maps.gsi.go.jp/development/ichiran.html"
+             target="_blank" rel="noopener noreferrer">他の地理院タイルを探す（国土地理院のタイル一覧）</a>
+        </p>
+      </div>
+
+      <p class="notes">
+        ※ HTTPSのXYZラスタータイル（.png / .jpg / .webp）に対応しています。<br>
+        ※ 配信元の利用条件を確認して使用してください。<br>
+        ※ 追加した設定はこのブラウザにだけ保存されます（サーバへは送りません）。<br>
+        ※ 地図表示時には、入力した配信元へ必要な地図タイルをブラウザから直接取得します。
+      </p>
+    </div>
+    <div class="foot">
+      <button type="button" id="tileCancel">キャンセル</button>
+      <button type="button" class="primary" id="tileSubmit">追加</button>
+    </div>
+    <div class="list">
+      <h3>追加済みの地図（このブラウザに保存）</h3>
+      <div id="tileList"></div>
+    </div>
+  </div>
+</div>
+
 <script src="./vendor/maplibre-gl.js"></script>
 <!-- v1.8-q: PMTiles をやめ、DEM から等高線をその場で作る。npm に無い fork なので vendor する -->
 <script src="./vendor/maplibre-contour-numpng.min.js"></script>
 <script>
 "use strict";
 const T0 = performance.now();
+
+/* --- コメント中の「指示 N 節」について ------------------------------------
+ * このファイルは v1.4 から版を重ねていて、コメントの「指示 N 節」は
+ * **その節を書いた版の作業指示書**を指す。版が違えば同じ番号が別のことを指す。
+ * 見分けは、直前の版名か、その節が置かれている区画の見出しで付ける。
+ *   例: 「指示 24 節」は v1.8-q では DEM 範囲外 404 の扱い、
+ *       v1.9.1-q では明るさ 0〜500% の写像。
+ * v1.9.1-q で足したコメントは、区画の見出しに v1.9.1-q と書いてある。
+ * -------------------------------------------------------------------------- */
 
 /* ==========================================================================
  * 1. 設定 — 触るのはこの節だけ
@@ -268,19 +551,193 @@ const DATASETS = {
                           14:[10,50],   15:[5,25],   16:[2,10],   17:[1,5], 18:[1,5] } },
 };
 
-// 背景地図 (v1.5 から変更なし。追加・削除・UI 再設計はしない)
+/* 背景地図 ------------------------------------------------------------------
+ * v1.9.1-q で構造だけ変えた。v1.9-q は「basemap という source が 1 個あって、
+ * 切り替えは setTiles で URL を差し替える」作りだった。1 つの背景が
+ * **複数の撮影範囲タイル**で出来ている日付別画像 (指示 30-33 節) はこれで表せない。
+ *
+ * ★ tiles:[url1,url2,url3] にしてはいけない (指示 34 節)。あれは同じタイルの
+ *   ミラー URL を並べるところで、MapLibre は 1 タイルにつきどれか 1 本しか
+ *   叩かない。撮影範囲が違うものを並べると、地域ごとに出たり出なかったりする。
+ *   地域ごとに source + raster layer を独立に登録し、同じ日付のものを
+ *   まとめて visible にする。
+ *
+ * parts の各要素が 1 枚の raster layer になる。id は layer / source の名前に使う。
+ * bounds は _probe/probe_gsi_coverage.py が z12 で総当たりして測った実測値。
+ * 入れておくと MapLibre が撮影範囲の外を要求しないので、404 の山が出ない
+ * (v1.9-q §14-2 と同じ考え方)。
+ * side を書くとその画面の選択肢にしか出ない (指示 29 節)。 */
+const GSI_XYZ = "https://cyberjapandata.gsi.go.jp/xyz/";
+const RINYA = "https://forestgeo.info/opendata/17_ishikawa/noto/";
 const BASEMAPS = {
-  gsi_std:     { label: "標準地図(地理院)",       url: "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png" },
-  gsi_ortho:   { label: "オルソ(電子国土基本図)", url: "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg" },
-  rinya_ortho: { label: "災害後オルソ(林野庁)",   url: "https://forestgeo.info/opendata/17_ishikawa/noto/orthophoto_2024/{z}/{x}/{y}.webp" },
-  rinya_rrim:  { label: "赤色立体地図(林野庁)",   url: "https://forestgeo.info/opendata/17_ishikawa/noto/rrim_2024/{z}/{x}/{y}.webp" },
-  rinya_cs:    { label: "CS立体図(林野庁)",       url: "https://forestgeo.info/opendata/17_ishikawa/noto/csmap_2024/{z}/{x}/{y}.webp" },
-  rinya_inyou: { label: "陰陽図(林野庁)",         url: "https://forestgeo.info/opendata/17_ishikawa/noto/inyouzu_2024/{z}/{x}/{y}.webp" },
-  none:        { label: "なし",                   url: null },
+  gsi_std:     { label: "標準地図(地理院)",
+                 parts: [{ id: "", url: GSI_XYZ + "std/{z}/{x}/{y}.png" }] },
+  gsi_ortho:   { label: "オルソ(電子国土基本図)",
+                 parts: [{ id: "", url: GSI_XYZ + "seamlessphoto/{z}/{x}/{y}.jpg" }] },
+  rinya_ortho: { label: "災害後オルソ(林野庁)",
+                 parts: [{ id: "", url: RINYA + "orthophoto_2024/{z}/{x}/{y}.webp" }] },
+  rinya_rrim:  { label: "赤色立体地図(林野庁)",
+                 parts: [{ id: "", url: RINYA + "rrim_2024/{z}/{x}/{y}.webp" }] },
+  rinya_cs:    { label: "CS立体図(林野庁)",
+                 parts: [{ id: "", url: RINYA + "csmap_2024/{z}/{x}/{y}.webp" }] },
+  rinya_inyou: { label: "陰陽図(林野庁)",
+                 parts: [{ id: "", url: RINYA + "inyouzu_2024/{z}/{x}/{y}.webp" }] },
+
+  /* --- v1.9.1-q: 地理院 令和6年能登半島地震 災害後撮影 (指示 28-32 節) ------
+   * 右画面だけに出す。左画面は災害前・通常時の比較基準として使うため (指示 29 節)。
+   * 10 セットとも地理院タイル一覧に実在し、z10-z18 で配信されていることを
+   * 実測した (_probe/probe_gsi_maxzoom2.py)。ID の下線の有無はセットごとに
+   * 違うので (0102 系は 20240102noto_ / 0105 系は 20240102_noto_)、そろえない。 */
+  gsi_0102: { label: "地理院 2024/1/2", side: "right", parts: [
+    { id: "suzu",           url: GSI_XYZ + "20240102noto_suzu_0102do/{z}/{x}/{y}.png",
+      bounds: [137.1094, 37.3702, 137.4609, 37.5794] },
+    { id: "wajima_central", url: GSI_XYZ + "20240102noto_wazimanaka_0102do/{z}/{x}/{y}.png",
+      bounds: [136.8457, 37.2303, 137.0215, 37.5097] },
+    { id: "wajima_east",    url: GSI_XYZ + "20240102noto_wazimahigashi_0102do/{z}/{x}/{y}.png",
+      bounds: [136.9336, 37.3003, 137.1973, 37.5794] },
+  ] },
+  gsi_0105: { label: "地理院 2024/1/5", side: "right", parts: [
+    { id: "suzu",           url: GSI_XYZ + "20240102_noto_suzu_0105do/{z}/{x}/{y}.png",
+      bounds: [137.1973, 37.3702, 137.4609, 37.5794] },
+    { id: "wajima_central", url: GSI_XYZ + "20240102_noto_wazimanaka_0105do/{z}/{x}/{y}.png",
+      bounds: [136.8457, 37.2303, 137.1094, 37.5097] },
+    { id: "anamizu",        url: GSI_XYZ + "20240102_noto_anamizu_0105do/{z}/{x}/{y}.png",
+      bounds: [136.8457, 37.0902, 137.2852, 37.4400] },
+    { id: "nanao",          url: GSI_XYZ + "20240102_noto_nanao_0105do/{z}/{x}/{y}.png",
+      bounds: [136.6699, 36.9499, 137.1094, 37.2303] },
+  ] },
+  gsi_0114: { label: "地理院 2024/1/14", side: "right", parts: [
+    { id: "suzu",        url: GSI_XYZ + "20240102noto_suzu_0114do/{z}/{x}/{y}.png",
+      bounds: [137.1973, 37.3702, 137.3730, 37.5794] },
+    { id: "wajima_east", url: GSI_XYZ + "20240102noto_wazimahigashi_0114do/{z}/{x}/{y}.png",
+      bounds: [137.0215, 37.3003, 137.1973, 37.5794] },
+    { id: "anamizu",     url: GSI_XYZ + "20240102noto_anamizu_0114do/{z}/{x}/{y}.png",
+      bounds: [136.8457, 37.2303, 137.2852, 37.4400] },
+  ] },
+
+  none:        { label: "なし", parts: [] },
 };
-const BASE_L_DEFAULT = "gsi_std";
+// v1.9.1-q 指示 4 節: 左の初期背景をオルソ(電子国土基本図)にする。
+// 選択肢は 1 つも減らしていない (指示 5 節)。右の既定は v1.9-q のまま (指示 36 節)。
+const BASE_L_DEFAULT = "gsi_ortho";
 const BASE_R_DEFAULT = "rinya_ortho";
 const BASEMAP_MAXZOOM = 18;
+// いま右画面に出ている背景のキー。外部タイルの案内の判断に使うので、
+// Map を作るより前に置いておく (error ハンドラから読まれるため)。
+let rightBaseKey = BASE_R_DEFAULT;
+
+/* --- v1.9.1-q 追加: 利用者が足す外部 XYZ タイル (追加指示 10-13・34-47 節) ---
+ *
+ * ★ **右画面だけ**の機能。左は災害前・通常時の基準として使うので足さない。
+ * ★ システム標準 (BASEMAPS) と混ぜない。別の配列で持ち、select でも
+ *   optgroup で分ける。BASEMAPS へ push しない (追加指示 35 節)。
+ * ★ 保存先は **その利用者のブラウザの localStorage だけ**。
+ *   GitHub へ送ることもデータベースへ入れることもしない (追加指示 43 節)。
+ * ★ 利用者が入れた名前を source / layer の id にしない。内部 id を振る
+ *   (追加指示 34 節)。名前は表示にしか使わない。 */
+const CUSTOM_KEY = "pondatlas.v1_9_1q.customBasemaps";
+const CUSTOM_MAX = 20;               // 際限なく増やさない
+let CUSTOM_BASEMAPS = [];            // {id, name, url, minzoom, maxzoom, attribution}
+
+// 入力見本。**システム標準背景としては登録しない**(追加指示 57 節)。
+// 「この例を入力」→「追加」でユーザー追加地図になる。
+// z10-z18 / bounds [136.8457, 37.2303, 137.2852, 37.5097] を実測済み
+// (_probe/probe_rain0923.py)。実画像が出る地点 37.4394, 137.0222。
+const SAMPLE_CUSTOM = {
+  name: "2024能登半島豪雨 9/23 輪島",
+  url: "https://cyberjapandata.gsi.go.jp/xyz/20240923rain_wajima_0923do_sokuho/{z}/{x}/{y}.png",
+  minzoom: 10, maxzoom: 18, attribution: "国土地理院",
+};
+
+const isCustomKey = (key) => typeof key === "string" && key.indexOf("custom_") === 0;
+const customById = (id) => CUSTOM_BASEMAPS.find((c) => c.id === id) || null;
+const customIds = () => CUSTOM_BASEMAPS.map((c) => c.id);
+
+/** タイル URL の検査 (追加指示 26-29 節)。問題なければ null、あれば文言を返す。 */
+function validateTileUrl(raw) {
+  const s = String(raw == null ? "" : raw).trim();
+  if (!s) return "タイルURLを入力してください。";
+  // javascript: / data: / file: / blob: などは受け付けない (追加指示 29 節)
+  if (/^\s*(javascript|data|file|blob|vbscript|about)\s*:/i.test(s)) {
+    return "このURLは使えません。https:// で始まるタイルURLを入力してください。";
+  }
+  if (!/^https:\/\//i.test(s)) return "HTTPSのタイルURLを入力してください。";
+  if (s.indexOf("{z}") < 0 || s.indexOf("{x}") < 0 || s.indexOf("{y}") < 0) {
+    return "XYZタイルURLには {z}、{x}、{y} が必要です。";
+  }
+  try {
+    const u = new URL(s.replace(/\{[zxy]\}/g, "0"));
+    if (u.protocol !== "https:") return "HTTPSのタイルURLを入力してください。";
+  } catch (e) {
+    return "URL として読み取れませんでした。もう一度確かめてください。";
+  }
+  return null;
+}
+
+/** localStorage から読んだものを検査して内部形に直す。壊れていれば null。
+ *  ★ 保存内容は書き換えられうるので、読み込み時にも URL を検査する。 */
+function normalizeCustom(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const id = String(raw.id || "");
+  if (!isCustomKey(id) || !/^custom_[A-Za-z0-9_]+$/.test(id)) return null;
+  const url = String(raw.url || "").trim();
+  if (validateTileUrl(url)) return null;
+  const zi = (v, d) => {
+    const n = Math.round(Number(v));
+    return isFinite(n) && n >= 0 && n <= 24 ? n : d;
+  };
+  const minzoom = zi(raw.minzoom, 0), maxzoom = zi(raw.maxzoom, 18);
+  return {
+    id: id,
+    name: String(raw.name || "").trim().slice(0, 60) || "(名称なし)",
+    url: url,
+    minzoom: Math.min(minzoom, maxzoom),
+    maxzoom: Math.max(minzoom, maxzoom),
+    attribution: String(raw.attribution || "").trim().slice(0, 120),
+  };
+}
+
+function loadCustomBasemaps() {
+  let arr = [];
+  try { arr = JSON.parse(localStorage.getItem(CUSTOM_KEY) || "[]"); } catch (e) { arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  const out = [], seen = new Set();
+  for (const raw of arr) {
+    const c = normalizeCustom(raw);
+    if (!c || seen.has(c.id)) continue;
+    seen.add(c.id);
+    out.push(c);
+    if (out.length >= CUSTOM_MAX) break;
+  }
+  return out;
+}
+function saveCustomBasemaps() {
+  try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(CUSTOM_BASEMAPS)); }
+  catch (e) { console.warn("[v1.6] 外部タイルの保存に失敗:", e); }
+}
+function newCustomId() {
+  return "custom_" + Date.now().toString(36) + "_"
+       + Math.floor(Math.random() * 1e6).toString(36);
+}
+// 保存してあるものを最初に読む。select を組み立てる前に必要。
+CUSTOM_BASEMAPS = loadCustomBasemaps();
+
+/** 背景 1 枚ぶんの layer / source の名前。source と layer で同じ名前を使う。 */
+function bmId(key, part) { return "bm_" + key + (part.id ? "_" + part.id : ""); }
+/** その背景を構成する layer 名の一覧 (日付グループは複数返る)。 */
+function bmIds(key) { return (BASEMAPS[key].parts || []).map((p) => bmId(key, p)); }
+// システム標準の全背景 layer 名。ラスタ 404 の判別に使う。
+const ALL_BM_IDS = Object.keys(BASEMAPS).flatMap(bmIds);
+const BM_ID_SET = new Set(ALL_BM_IDS);
+/** その背景キーを構成する layer 名。ユーザー追加地図は layer 1 枚 = id そのもの。 */
+function bmIdsAny(key) {
+  if (BASEMAPS[key]) return bmIds(key);
+  return customById(key) ? [key] : [];
+}
+/** 背景として登録されている layer 名を全部 (標準 + ユーザー追加)。 */
+function allBackgroundIds() { return ALL_BM_IDS.concat(customIds()); }
+/** その source が背景ラスタか。取得失敗をアプリ異常にしないための判別に使う。 */
+function isBackgroundSource(id) { return BM_ID_SET.has(id) || !!customById(id); }
 
 // クラスタ件数の文字に要る glyphs。MapLibre 公式のデモ配信を使う。
 // ★ 同じホストでも "Open Sans Regular" は 404 で、"Noto Sans Regular" だけが 200。
@@ -344,7 +801,45 @@ const CONTOUR_SOURCE_LAYER = "contours";
 const HIDE_ZERO_CONTOUR = Q.get("zero") !== "1";
 
 const CONTOUR_LAYERS = ["contour-index", "contour-minor"];
+const CONTOUR_MINOR_LAYER = "contour-minor";
+const CONTOUR_INDEX_LAYER = "contour-index";
 const SELECTED_CONTOUR_LAYER = "contour-selected";
+
+/* --- v1.9.1-q: 等高線の色 3 パターン (指示 10 節) --------------------------
+ * 指示は白・黒を rgba() で書いているが、ここでは色と不透明度を分けて持つ。
+ * line-opacity を **ON/OFF の唯一のつまみ**にしたいので、色の側に alpha を
+ * 混ぜると OFF (opacity 0) との掛け算がややこしくなるため。
+ * 実効の濃さは指示の rgba とそろえてある:
+ *   白 通常線 #ffffff @0.80 = rgba(255,255,255,0.80)
+ *   黒 通常線 #1e1e1e @0.75 = rgba(30,30,30,0.75)
+ * 「標準」は v1.9-q の値そのまま (#c2703c @0.85 / #8a3b0b @0.95)。
+ *
+ * ★ 選択等高線 (--sel) と測線・カーソルには適用しない (指示 11 節)。
+ *   識別色なので、通常線と同じ色になると水位が読めなくなる。 */
+const CONTOUR_STYLES = {
+  std:   { label: "標準", minor: { color: "#c2703c", opacity: 0.85 },
+                          index: { color: "#8a3b0b", opacity: 0.95 } },
+  white: { label: "白",   minor: { color: "#ffffff", opacity: 0.80 },
+                          index: { color: "#ffffff", opacity: 1.00 } },
+  black: { label: "黒",   minor: { color: "#1e1e1e", opacity: 0.75 },
+                          index: { color: "#000000", opacity: 1.00 } },
+};
+const CONTOUR_STYLE_DEFAULT = "std";
+let contourOn = true;                       // 指示 6 節: 既定は表示
+let contourStyleKey = CONTOUR_STYLE_DEFAULT;
+const contourPaint = () => CONTOUR_STYLES[contourStyleKey] || CONTOUR_STYLES.std;
+
+/* --- v1.9.1-q: 明るさ (指示 18 節 / 修正指示 2・3 節) -----------------------
+ * UI は 0〜500%、100% が標準。**別の数式へ変換しない。**
+ * スライダの値をそのまま CSS の brightness() へ渡す。
+ *   50% -> brightness(50%)   200% -> brightness(200%)   500% -> brightness(500%)
+ *
+ * 以前あった brightToRaster()（raster-brightness-min/-max への写像）は
+ * **廃止した**。min を上げると黒が灰色へ持ち上がって暗部が白っぽくなり、
+ * 基準にした Leaflet 版と見え方が違ったため（修正指示 1・12 節）。 */
+const BRIGHT_DEFAULT = 100, BRIGHT_MIN = 0, BRIGHT_MAX = 500;
+const clampBright = (b) =>
+  Math.max(BRIGHT_MIN, Math.min(BRIGHT_MAX, Math.round(Number(b) || 0)));
 const CONTOUR_ALL_LAYERS = CONTOUR_LAYERS.concat([SELECTED_CONTOUR_LAYER]);
 const CLUSTER_LAYER = "pond-cluster";
 const CLUSTER_COUNT_LAYER = "pond-cluster-count";
@@ -369,7 +864,12 @@ function fmtBytes(n) {
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return n.toFixed(i === 0 ? 0 : 1) + " " + u[i];
 }
-function showError(msg) { $("d-err").textContent = msg; }
+function showError(msg) {
+  $("d-err").textContent = msg;
+  // 診断は折りたたんであるので、異常は チップの ⚠ で見せる (指示 17 節)。
+  // 自動では展開しない。
+  if (typeof updateDiagMark === "function") updateDiagMark();
+}
 
 if (location.protocol === "file:") {
   const el = $("nodata");
@@ -379,6 +879,8 @@ if (location.protocol === "file:") {
     "(Worker は同一オリジンを要求し、file:// は常に別オリジン扱いになります)。<br>" +
     "ため池 JSON の fetch も file:// ではブロックされます。<br><br>" +
     "公開版は次の URL から開いてください。<br>" +
+    /* ★ 公開先のリポジトリは v1.9-q のまま。アプリの中身だけ版を上げていく運用に
+     *   したので、URL は pond-viewer-v1.9-q。v1.9.1-q という URL は無い。 */
     "<code>https://yoichifujihara.github.io/pond-viewer-v1.9-q/</code><br><br>" +
     "<span style=\"opacity:.7\">手元のファイルで動かす場合は、そのフォルダを" +
     " 静的 HTTP サーバで配信してください (Range 対応は不要です)。</span>";
@@ -599,16 +1101,45 @@ function selectedPondFilter(id) {
                  ["==", ["get", "pond_id"], id === null ? -1 : id]];
 }
 
+/* 背景の source と layer をまとめて作る (v1.9.1-q)。
+ *
+ * ★ 全背景ぶんの layer を最初から style に入れておき、切り替えは visibility だけ
+ *   で行う。MapLibre は visibility:none の layer の source を **1 タイルも
+ *   取りに行かない** ので、16 枚ぶん並べても通信は選択中の 1 背景だけになる
+ *   (v1.6 が CONTOUR_MIN_ZOOM の minzoom 1 行で DEM を止めているのと同じ理屈)。
+ *   v1.9-q の setTiles 方式のままでは、日付グループの複数 source を扱えない。
+ *
+ * raster-brightness-min / -max は **無加工の既定値 (0 / 1) のまま置いてあるだけ**。
+ * 明るさは canvas への CSS filter でかけるので、ここは動かさない
+ * (修正指示 9 節: 二重にかけない)。 */
+function basemapStyleParts(basemapKey) {
+  const sources = {}, layers = [];
+  for (const [key, b] of Object.entries(BASEMAPS)) {
+    for (const p of (b.parts || [])) {
+      const id = bmId(key, p);
+      const src = {
+        type: "raster", tiles: [p.url], tileSize: 256,
+        minzoom: 0, maxzoom: p.maxzoom || BASEMAP_MAXZOOM, attribution: ATTRIB,
+      };
+      if (p.bounds) src.bounds = p.bounds;   // 撮影範囲の外を要求しない (指示 35 節)
+      sources[id] = src;
+      layers.push({
+        id: id, type: "raster", source: id,
+        layout: { visibility: key === basemapKey ? "visible" : "none" },
+        paint: { "raster-brightness-min": 0, "raster-brightness-max": 1 },
+      });
+    }
+  }
+  return { sources, layers };
+}
+
 function buildStyle(basemapKey) {
-  const b = BASEMAPS[basemapKey];
+  const bm = basemapStyleParts(basemapKey);
+  const cs = contourPaint();
   return {
     version: 8,
     glyphs: GLYPHS,
-    sources: {
-      basemap: {
-        type: "raster", tiles: [b.url || BASEMAPS.gsi_std.url], tileSize: 256,
-        minzoom: 0, maxzoom: BASEMAP_MAXZOOM, attribution: ATTRIB,
-      },
+    sources: Object.assign({}, bm.sources, {
       /* 動的等高線。左右とも同じ CONTOUR_TILE_URL を指すので DemSource が共有される。
        * maxzoom を DEM_MAXZOOM にしておくと、z18 より寄っても新しい DEM を
        * 取りに行かず z18 の等高線タイルを拡大して使う。
@@ -619,6 +1150,14 @@ function buildStyle(basemapKey) {
         minzoom: CONTOUR_MIN_ZOOM,
         maxzoom: DEM_MAXZOOM,
         bounds: DEM_BOUNDS,
+        /* ★ 出典は背景だけでなくここにも付ける。
+         *   MapLibre は「見えている layer が使っている source」の出典しか
+         *   出さない。背景を「なし」やユーザー追加地図にすると、背景 source の
+         *   出典が消え、**DEM と maplibre-contour の表記まで一緒に消えていた**。
+         *   等高線は描かれているのに出典が無いのはまずい (v1.9-q 指示 42 節)。
+         *   等高線 source は常にあるので、ここに付けておけば必ず残る。
+         *   MapLibre は同じ文字列を重複表示しないので二重にはならない。 */
+        attribution: ATTRIB,
       },
       // ため池。データは fetch 後に setData で入れる (style を作り直さない)。
       ponds: {
@@ -628,32 +1167,29 @@ function buildStyle(basemapKey) {
         clusterMaxZoom: CLUSTER_MAX_ZOOM,
         clusterRadius: CLUSTER_RADIUS,
       },
-    },
-    layers: [
-      { id: "basemap", type: "raster", source: "basemap",
-        layout: { visibility: b.url ? "visible" : "none" } },
-
+    }),
+    layers: bm.layers.concat([
       /* --- 等高線 (v1.5 と同じ描き分け + minzoom。色も線幅もそのまま) ----
        * minzoom を入れておくと、それ未満のズームでは layer が隠れ、
        * MapLibre はこの source のタイルを取りに行かない。広域表示で
        * DEM に 1 枚も触らないのはこの 1 行で成立している。 */
       {
-        id: "contour-minor", type: "line", source: "contours", "source-layer": CONTOUR_SOURCE_LAYER,
+        id: CONTOUR_MINOR_LAYER, type: "line", source: "contours", "source-layer": CONTOUR_SOURCE_LAYER,
         minzoom: CONTOUR_MIN_ZOOM,
         filter: contourFilter(false),
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#c2703c", "line-opacity": 0.85,
+          "line-color": cs.minor.color, "line-opacity": contourOn ? cs.minor.opacity : 0,
           "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.4, 14, 0.6, 16, 0.9, 20, 1.6],
         },
       },
       {
-        id: "contour-index", type: "line", source: "contours", "source-layer": CONTOUR_SOURCE_LAYER,
+        id: CONTOUR_INDEX_LAYER, type: "line", source: "contours", "source-layer": CONTOUR_SOURCE_LAYER,
         minzoom: CONTOUR_MIN_ZOOM,
         filter: contourFilter(true),
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#8a3b0b", "line-opacity": 0.95,
+          "line-color": cs.index.color, "line-opacity": contourOn ? cs.index.opacity : 0,
           "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.9, 14, 1.4, 16, 2.0, 20, 3.4],
         },
       },
@@ -705,7 +1241,7 @@ function buildStyle(basemapKey) {
           "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 6, 13, 8, 16, 11, 20, 14],
         },
       },
-    ],
+    ]),
   };
 }
 
@@ -726,9 +1262,46 @@ function makeMap(container, basemapKey, useHash) {
   map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-left");
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
   map.on("error", (e) => {
+    /* ★ 背景ラスタの取得失敗をアプリの異常として出さない (指示 35 節)。
+     *   日付別画像は撮影範囲が地域ごとに違うので、隣の地域を映している
+     *   layer は当然 404 を返す。bounds を入れて大半は止めてあるが、
+     *   外接矩形の内側で撮影範囲から外れるぶんはどうしても残る
+     *   (v1.9-q が DEM の 404 で踏んだのと同じ形)。数えるだけにする。 */
+    if (e && e.sourceId && isBackgroundSource(e.sourceId)) {
+      bmMiss++;
+      // ★ ユーザー追加タイルの失敗は DEM の判定へ回さない (追加指示 53 節)。
+      //   別に数えて、続けて取れないときだけ控えめな案内を出す。
+      if (customById(e.sourceId)) {
+        customFail[e.sourceId] = (customFail[e.sourceId] || 0) + 1;
+        reviewTileWarn();
+      }
+      renderBmMiss();
+      return;
+    }
+    /* ★ 等高線 source の失敗もここでは出さない。
+     *   12 節の専用ハンドラが「範囲外の 404」と「本当の失敗」を分けて数え、
+     *   帯の要否まで決めている。ここで showError してしまうと、
+     *   **能登の陸域でも DEM が無い場所へ寄っただけで診断が「エラー」になり、
+     *   チップが ⚠ になる**。配信元は正常なのに障害と見せるのは誤り
+     *   (v1.9-q §14-2 と同じ考え方)。実際、輪島の海沿いで踏んだ。 */
+    if (e && e.sourceId === "contours") return;
     showError("MapLibre: " + (e && e.error ? e.error.message : "unknown error"));
   });
   return map;
+}
+
+// 背景ラスタの範囲外カウント。診断パネルに出すだけで、DEM の警告には使わない。
+let bmMiss = 0;
+const customFail = {};     // ユーザー追加タイルの id -> 取得失敗の枚数
+const customOk = {};       // 同 -> 取れた枚数
+function renderBmMiss() {
+  const el = $("d-bm");
+  if (!el) return;
+  const cur = rightBaseKey;
+  const extra = (cur && customById(cur))
+    ? " / 外部 失敗 " + (customFail[cur] || 0) + " 取得 " + (customOk[cur] || 0)
+    : "";
+  el.textContent = (bmMiss ? "範囲外 " + bmMiss + " 枚" : "正常") + extra;
 }
 
 const mapL = makeMap("mapL", BASE_L_DEFAULT, true);
@@ -774,8 +1347,9 @@ function makePane(map, side, overlayId) {
   labels.style.cssText = "position:absolute;inset:0;";
   const ghost = document.createElement("div"); ghost.className = "ghost";
   ov.append(axisV, axisH, axisC, labels, ghost);
+  // bright は指示 18 節の UI 上の明るさ [%]。左右で完全に独立させる (指示 21 節)。
   return { map, side, ov, axisV, axisH, axisC, labels, ghost,
-           sig: "", dirty: true, nLabels: 0 };
+           sig: "", dirty: true, nLabels: 0, bright: BRIGHT_DEFAULT };
 }
 const paneL = makePane(mapL, "左", "ovL");
 const paneR = mapR ? makePane(mapR, "右", "ovR") : null;
@@ -1193,7 +1767,9 @@ function refreshPane(pane) {
   const W = cv.clientWidth, H = cv.clientHeight;
   layoutAxes(pane, W, H);
 
-  if (axisDir === "none" || map.getZoom() < LABEL_MIN_ZOOM) {
+  // 等高線 OFF のときは標高ラベルも出さない (指示 8 節)。
+  // 測線そのものは layoutAxes で描いたままにする (指示 8 節は測線を消さない)。
+  if (!contourOn || axisDir === "none" || map.getZoom() < LABEL_MIN_ZOOM) {
     pane.labels.innerHTML = "";
     pane.nLabels = 0;
     return 0;
@@ -1281,25 +1857,515 @@ window.addEventListener("resize", () => {
 });
 
 /* ==========================================================================
- * 10. 背景地図・画面数 (v1.5 から変更なし)
+ * 10. 背景地図・画面数
+ *
+ * v1.5 から据え置きだったが、v1.9.1-q で背景の切り替え方を作り替えた。
+ * ここには v1.9.1-q で足した 3 つ (明るさ / 等高線の ON・色 / 診断の折りたたみ) の
+ * 配線もまとめてある。画面数の切り替えだけが v1.5 のまま。
  * ========================================================================== */
-function fillBaseSelect(sel, current) {
+/** side は "left" / "right"。side 指定のある背景はその画面にだけ出す (指示 29 節)。 */
+function fillBaseSelect(sel, current, side) {
   for (const [key, b] of Object.entries(BASEMAPS)) {
+    if (b.side && b.side !== side) continue;
     const o = document.createElement("option");
     o.value = key; o.textContent = b.label; o.selected = (key === current);
     sel.appendChild(o);
   }
 }
-function setBasemap(map, key) {
-  const b = BASEMAPS[key];
-  if (!b.url) { map.setLayoutProperty("basemap", "visibility", "none"); return; }
-  map.setLayoutProperty("basemap", "visibility", "visible");
-  map.getSource("basemap").setTiles([b.url]);
+
+/* --- 右の背景 select。標準地図とユーザー追加地図を optgroup で分ける ------
+ * (追加指示 12・13・40 節)。option の文字は textContent で入れる。
+ * 利用者が入れた名前を innerHTML へ流し込まない (追加指示 30 節)。 */
+function rebuildBaseRSelect() {
+  const sel = $("baseR");
+  const keep = sel.value || rightBaseKey;
+  while (sel.firstChild) sel.removeChild(sel.firstChild);
+
+  const mkOpt = (value, text) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;         // ★ textContent。innerHTML にしない
+    return o;
+  };
+  const g1 = document.createElement("optgroup");
+  g1.label = "標準地図";
+  for (const [key, b] of Object.entries(BASEMAPS)) {
+    if (b.side && b.side !== "right") continue;
+    g1.appendChild(mkOpt(key, b.label));
+  }
+  sel.appendChild(g1);
+
+  if (CUSTOM_BASEMAPS.length) {
+    const g2 = document.createElement("optgroup");
+    g2.label = "ユーザー追加地図";
+    for (const c of CUSTOM_BASEMAPS) g2.appendChild(mkOpt(c.id, c.name));
+    sel.appendChild(g2);
+  }
+  // 消えた地図を選んだままにしない
+  const exists = Array.from(sel.options).some((o) => o.value === keep);
+  sel.value = exists ? keep : BASE_R_DEFAULT;
 }
-fillBaseSelect($("baseL"), BASE_L_DEFAULT);
-fillBaseSelect($("baseR"), BASE_R_DEFAULT);
-$("baseL").onchange = (e) => setBasemap(mapL, e.target.value);
-$("baseR").onchange = (e) => { if (mapR) setBasemap(mapR, e.target.value); };
+
+/** 背景の切り替え。選ばれた背景を構成する layer だけを visible にする。
+ *  日付グループは複数 layer をまとめて visible にする (指示 27・33 節)。
+ *  ユーザー追加地図 (layer 1 枚) も同じ経路で扱う。 */
+function setBasemap(pane, key) {
+  const map = pane.map;
+  const want = new Set(bmIdsAny(key));
+  for (const id of allBackgroundIds()) {
+    if (!map.getLayer(id)) continue;
+    map.setLayoutProperty(id, "visibility", want.has(id) ? "visible" : "none");
+  }
+  if (pane === paneR) {
+    rightBaseKey = key;
+    // 別の地図へ移ったら、前の地図の失敗数は案内の判断材料にしない
+    setTileWarn(false);
+    renderBmMiss();
+  }
+  // 指示 26 節 / 修正指示 10 節 / 追加指示 48 節:
+  // 背景を切り替えても明るさは保つ。CSS filter は canvas にかかっていて
+  // 背景切替では消えないので本来不要だが、確実にするために呼んでおく。
+  applyBrightness(pane);
+}
+let leftBaseKey = BASE_L_DEFAULT;
+fillBaseSelect($("baseL"), BASE_L_DEFAULT, "left");
+rebuildBaseRSelect();
+$("baseL").onchange = (e) => { leftBaseKey = e.target.value; setBasemap(paneL, e.target.value); };
+$("baseR").onchange = (e) => { if (paneR) setBasemap(paneR, e.target.value); };
+/* ★ 再読み込みで select が勝手に前回値へ戻らないようにする。
+ *   autocomplete="off" を付けてあるが、ブラウザの復元は script より後に
+ *   走ることがあるので、load 後にもう一度こちらの状態へ合わせ直す。
+ *   これを入れないと「地図は既定の背景なのに select だけ別のものを指す」
+ *   という食い違いが起きる (外部タイル追加後の再読み込みで踏んだ)。 */
+function syncControlsToState() {
+  if ($("baseL").value !== leftBaseKey) $("baseL").value = leftBaseKey;
+  if ($("baseR").value !== rightBaseKey) $("baseR").value = rightBaseKey;
+  $("ctOn").checked = contourOn;
+  $("ctColor").value = contourStyleKey;
+  window.__loadSyncRan = true;
+}
+window.addEventListener("load", syncControlsToState);
+// pageshow は復元が終わったあとに来る。load だけだと間に合わないことがある。
+window.addEventListener("pageshow", syncControlsToState);
+
+/* --------------------------------------------------------------------------
+ * ユーザー追加地図を右 Map へ登録する (追加指示 36・37 節)
+ *
+ * ★ 右 Map にしか足さない。
+ * ★ 等高線より **下** へ入れる (beforeId に等高線レイヤを指定)。
+ *   でないと背景が等高線とため池を覆い隠す。
+ * ★ 出典は MapLibre が HTML として解釈するので、必ずエスケープして渡す
+ *   (追加指示 30・38 節)。
+ * -------------------------------------------------------------------------- */
+function addCustomLayer(c) {
+  if (!mapR || !mapR.getLayer(CONTOUR_MINOR_LAYER)) return false;
+  if (mapR.getSource(c.id)) return true;
+  const src = {
+    type: "raster", tiles: [c.url], tileSize: 256,
+    minzoom: c.minzoom, maxzoom: c.maxzoom,
+  };
+  if (c.attribution) src.attribution = esc(c.attribution);
+  mapR.addSource(c.id, src);
+  mapR.addLayer({
+    id: c.id, type: "raster", source: c.id,
+    layout: { visibility: "none" },
+    paint: { "raster-brightness-min": 0, "raster-brightness-max": 1 },
+  }, CONTOUR_MINOR_LAYER);
+  return true;
+}
+function removeCustomLayer(id) {
+  if (!mapR) return;
+  if (mapR.getLayer(id)) mapR.removeLayer(id);
+  if (mapR.getSource(id)) mapR.removeSource(id);
+  delete customFail[id];
+  delete customOk[id];
+}
+/** style が出来てから登録する。ページを開き直したときの復元もここを通る。 */
+function registerAllCustomLayers() {
+  if (!mapR) return;
+  if (!mapR.getLayer(CONTOUR_MINOR_LAYER)) {
+    mapR.once("styledata", registerAllCustomLayers);
+    return;
+  }
+  for (const c of CUSTOM_BASEMAPS) addCustomLayer(c);
+}
+
+/* 外部タイルが続けて取れないときの案内 (追加指示 51-54 節)。
+ * ★ 単発の 404 では出さない。外部タイルは撮影範囲が限られていることが多く、
+ *   範囲外の 404 は正常な挙動だから (DEM で同じことを踏んでいる)。
+ * ★ DEM の帯 (#demwarn) とは完全に別。混ぜない (追加指示 53 節)。 */
+const TILE_FAIL_LIMIT = 8;
+let tileWarnShown = false;
+function setTileWarn(on) {
+  if (on === tileWarnShown) return;
+  tileWarnShown = on;
+  const el = $("tilewarn");
+  if (el) el.style.display = on ? "block" : "none";
+  if (on) console.warn("[v1.6] 外部タイルを表示できません:", rightBaseKey,
+                       "失敗", customFail[rightBaseKey] || 0);
+}
+function reviewTileWarn() {
+  const id = rightBaseKey;
+  if (!id || !customById(id)) { setTileWarn(false); return; }
+  // 1 枚でも取れているなら「表示できない」ではない
+  setTileWarn((customOk[id] || 0) === 0 && (customFail[id] || 0) >= TILE_FAIL_LIMIT);
+  renderBmMiss();
+}
+if (mapR) {
+  // 取れた枚数を数える。取れているなら案内は出さない。
+  mapR.on("sourcedata", (e) => {
+    if (!e || !e.sourceId || !customById(e.sourceId)) return;
+    if (e.tile && e.tile.state === "loaded") {
+      customOk[e.sourceId] = (customOk[e.sourceId] || 0) + 1;
+      if (e.sourceId === rightBaseKey) reviewTileWarn();
+    }
+  });
+  mapR.on("idle", () => reviewTileWarn());
+}
+registerAllCustomLayers();
+
+/* ==========================================================================
+ * 10-2. 外部タイル追加ダイアログ (追加指示 15-23・31-33・39・45-47 節)
+ *
+ * 入れてもらうのは「地図の名前」と「タイルURL」の 2 つだけ。
+ * source / layer / tileSize / bounds / scheme は入力させない (追加指示 11 節)。
+ * ========================================================================== */
+const tileDlg = {
+  back: $("tileDlgBack"), title: $("tileDlgTitle"), err: $("tileErr"),
+  name: $("tileName"), url: $("tileUrl"), minz: $("tileMinZ"),
+  maxz: $("tileMaxZ"), attr: $("tileAttr"), adv: $("tileAdv"),
+  submit: $("tileSubmit"), list: $("tileList"),
+  editingId: null,
+};
+
+function tileDlgError(msg) {
+  tileDlg.err.textContent = msg || "";      // ★ textContent
+  tileDlg.err.classList.toggle("on", !!msg);
+}
+
+function renderTileList() {
+  const box = tileDlg.list;
+  while (box.firstChild) box.removeChild(box.firstChild);
+  if (!CUSTOM_BASEMAPS.length) {
+    const p = document.createElement("div");
+    p.className = "empty";
+    p.textContent = "まだありません。上の欄に名前とURLを入れて「追加」を押してください。";
+    box.appendChild(p);
+    return;
+  }
+  for (const c of CUSTOM_BASEMAPS) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const nm = document.createElement("div");
+    nm.className = "nm";
+    nm.textContent = c.name;                 // ★ textContent
+    const u = document.createElement("span");
+    u.className = "u";
+    u.textContent = c.url;                   // ★ textContent
+    nm.appendChild(u);
+    const ed = document.createElement("button");
+    ed.type = "button"; ed.textContent = "編集";
+    ed.onclick = () => openTileDialog(c.id);
+    const rm = document.createElement("button");
+    rm.type = "button"; rm.textContent = "削除";
+    rm.onclick = () => deleteCustom(c.id);
+    row.append(nm, ed, rm);
+    box.appendChild(row);
+  }
+}
+
+function openTileDialog(editId) {
+  const c = editId ? customById(editId) : null;
+  tileDlg.editingId = c ? c.id : null;
+  tileDlg.title.childNodes[0].nodeValue = c ? "外部タイルを編集 " : "外部タイルを追加 ";
+  tileDlg.submit.textContent = c ? "保存" : "追加";
+  tileDlg.name.value = c ? c.name : "";
+  tileDlg.url.value = c ? c.url : "";
+  tileDlg.minz.value = c ? String(c.minzoom) : "0";
+  tileDlg.maxz.value = c ? String(c.maxzoom) : "18";
+  tileDlg.attr.value = c ? c.attribution : "";
+  tileDlg.adv.open = !!(c && (c.minzoom !== 0 || c.maxzoom !== 18 || c.attribution));
+  tileDlgError("");
+  renderTileList();
+  tileDlg.back.classList.add("open");
+  setTimeout(() => tileDlg.name.focus(), 0);
+}
+function closeTileDialog() {
+  tileDlg.back.classList.remove("open");
+  tileDlg.editingId = null;
+}
+
+function readTileForm() {
+  const name = tileDlg.name.value.trim().slice(0, 60);
+  const url = tileDlg.url.value.trim();
+  if (!name) return { error: "地図の名前を入力してください。" };
+  const bad = validateTileUrl(url);
+  if (bad) return { error: bad };
+  const num = (el, d) => {
+    const n = Math.round(Number(el.value));
+    return isFinite(n) && n >= 0 && n <= 24 ? n : d;
+  };
+  let minzoom = num(tileDlg.minz, 0), maxzoom = num(tileDlg.maxz, 18);
+  if (minzoom > maxzoom) { const t = minzoom; minzoom = maxzoom; maxzoom = t; }
+  return { rec: { name, url, minzoom, maxzoom,
+                  attribution: tileDlg.attr.value.trim().slice(0, 120) } };
+}
+
+function submitTileForm() {
+  const r = readTileForm();
+  if (r.error) { tileDlgError(r.error); return; }
+  if (!mapR) { tileDlgError("1画面計測のため、外部タイルは追加できません。"); return; }
+
+  if (tileDlg.editingId) {
+    const c = customById(tileDlg.editingId);
+    if (!c) { tileDlgError("編集対象が見つかりませんでした。"); return; }
+    // URL やズームが変わるので、いったん外して入れ直す
+    const wasSelected = (rightBaseKey === c.id);
+    removeCustomLayer(c.id);
+    Object.assign(c, r.rec);
+    // まだ style が出来ていない稀な場合は、出来しだい登録し直す
+    if (!addCustomLayer(c)) registerAllCustomLayers();
+    saveCustomBasemaps();
+    rebuildBaseRSelect();
+    if (wasSelected) { $("baseR").value = c.id; setBasemap(paneR, c.id); }
+    console.log("[v1.6] 外部タイルを編集:", { id: c.id, name: c.name, url: c.url });
+  } else {
+    if (CUSTOM_BASEMAPS.length >= CUSTOM_MAX) {
+      tileDlgError("追加できるのは " + CUSTOM_MAX + " 件までです。"
+                 + "使わないものを削除してください。");
+      return;
+    }
+    const c = Object.assign({ id: newCustomId() }, r.rec);
+    CUSTOM_BASEMAPS.push(c);
+    if (!addCustomLayer(c)) {
+      CUSTOM_BASEMAPS.pop();
+      tileDlgError("地図の準備がまだ終わっていません。少し待ってからもう一度お試しください。");
+      return;
+    }
+    saveCustomBasemaps();
+    rebuildBaseRSelect();
+    // 追加した地図をそのまま右へ出す (追加指示 39 節)
+    $("baseR").value = c.id;
+    setBasemap(paneR, c.id);
+    console.log("[v1.6] 外部タイルを追加:", { id: c.id, name: c.name, url: c.url,
+      minzoom: c.minzoom, maxzoom: c.maxzoom });
+  }
+  closeTileDialog();
+}
+
+function deleteCustom(id) {
+  const c = customById(id);
+  if (!c) return;
+  // 追加指示 47 節。消えるのはこのブラウザの設定だけ
+  if (!window.confirm("「" + c.name + "」をユーザー追加地図から削除しますか？\n"
+                      + "(このブラウザに保存した設定だけを消します)")) return;
+  const wasSelected = (rightBaseKey === id);
+  removeCustomLayer(id);
+  CUSTOM_BASEMAPS = CUSTOM_BASEMAPS.filter((x) => x.id !== id);
+  saveCustomBasemaps();
+  rebuildBaseRSelect();
+  if (wasSelected) { $("baseR").value = BASE_R_DEFAULT; setBasemap(paneR, BASE_R_DEFAULT); }
+  renderTileList();
+  console.log("[v1.6] 外部タイルを削除:", id);
+}
+
+$("tileAddBtn").onclick = () => openTileDialog(null);
+$("tileDlgClose").onclick = closeTileDialog;
+$("tileCancel").onclick = closeTileDialog;
+$("tileSubmit").onclick = submitTileForm;
+// ★ 「この例を入力」は入力欄を埋めるだけ。地図へは追加しない (追加指示 20 節)
+$("tileSampleBtn").onclick = () => {
+  tileDlg.name.value = SAMPLE_CUSTOM.name;
+  tileDlg.url.value = SAMPLE_CUSTOM.url;
+  tileDlg.minz.value = String(SAMPLE_CUSTOM.minzoom);
+  tileDlg.maxz.value = String(SAMPLE_CUSTOM.maxzoom);
+  tileDlg.attr.value = SAMPLE_CUSTOM.attribution;
+  tileDlg.adv.open = true;
+  tileDlgError("");
+};
+tileDlg.back.addEventListener("click", (e) => {
+  if (e.target === tileDlg.back) closeTileDialog();     // 外側を押したら閉じる
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && tileDlg.back.classList.contains("open")) closeTileDialog();
+});
+tileDlg.url.addEventListener("input", () => tileDlgError(""));
+tileDlg.name.addEventListener("input", () => tileDlgError(""));
+if (!mapR) {
+  $("tileAddBtn").disabled = true;
+  $("tileAddBtn").title = "1画面計測のため無効";
+}
+// 自動確認から使えるようにしておく
+window.__tile = { open: openTileDialog, close: closeTileDialog, submit: submitTileForm,
+                  del: deleteCustom, list: () => CUSTOM_BASEMAPS.slice(),
+                  sample: () => SAMPLE_CUSTOM };
+
+/* --------------------------------------------------------------------------
+ * 明るさ — その画面の canvas へ CSS brightness() をかける
+ * (指示 18-27 節を、修正指示 2・3・9 節で置き換えた)
+ *
+ * ★ raster-brightness-min / -max は **もう触らない**。style の初期値
+ *   (0 / 1 = 無加工) のまま置いてあるだけ。二重にかけないため
+ *   (修正指示 9 節)。
+ * ★ 背景を切り替えても canvas は作り直されないので、CSS filter は
+ *   そのまま残る (修正指示 10 節)。setBasemap から呼んでいるのは、
+ *   万一 canvas が差し替わっても値が復ることを保証するための保険。
+ * -------------------------------------------------------------------------- */
+function applyBrightness(pane) {
+  if (!pane || !pane.map) return;
+  const v = clampBright(pane.bright);
+  pane.map.getCanvas().style.filter = "brightness(" + v + "%)";
+}
+
+/* 明るさパネルの開閉 (追加指示 4-7 節)。
+ * ★ 初期状態は **展開**。HTML の class に open を書いてあるのが既定で、
+ *   ここでは localStorage に「最小化した」記録があるときだけ畳む。
+ * ★ 開閉は左右独立。片方を畳んでももう片方は開いたまま。
+ * ★ 地図をクリックしても畳まない。以前は検索候補と同じ扱いで
+ *   document クリックで閉じていたが、既定が展開になった以上
+ *   「地図を触るたびに消える」のは邪魔なので外した。 */
+const BRIGHT_MIN_KEY = "pondatlas.v1_9_1q.brightMinimized";
+
+function loadBrightMinimized() {
+  try {
+    const v = JSON.parse(localStorage.getItem(BRIGHT_MIN_KEY) || "{}");
+    return { L: v.L === true, R: v.R === true };
+  } catch (e) { return { L: false, R: false }; }
+}
+function saveBrightMinimized() {
+  try {
+    localStorage.setItem(BRIGHT_MIN_KEY, JSON.stringify({
+      L: !$("brightL").classList.contains("open"),
+      R: !$("brightR").classList.contains("open"),
+    }));
+  } catch (e) { /* プライベートモード等。保存できなくても動作に影響させない */ }
+}
+
+function bindBrightness(pane, side) {
+  const S = side;                                   // "L" / "R"
+  const wrap = $("bright" + S), chip = $("brightChip" + S);
+  const range = $("brightRange" + S), num = $("brightNum" + S), val = $("brightVal" + S);
+  if (!pane) {                                      // 1 画面計測のときの右
+    wrap.classList.remove("open");                  // 畳んだうえで無効にする
+    chip.disabled = true;
+    chip.title = "1画面計測のため無効";
+    return;
+  }
+  function render() {
+    val.textContent = String(pane.bright);
+    num.textContent = pane.bright + "%";
+    range.value = String(pane.bright);
+    chip.classList.toggle("on", pane.bright !== BRIGHT_DEFAULT);
+  }
+  function set(v) {
+    pane.bright = clampBright(v);
+    render();
+    applyBrightness(pane);
+    console.log("[v1.6] brightness (" + pane.side + "): " + pane.bright
+      + "% -> filter brightness(" + pane.bright + "%)");
+  }
+  function setOpen(open) {
+    wrap.classList.toggle("open", open);
+    chip.setAttribute("aria-expanded", open ? "true" : "false");
+    saveBrightMinimized();
+  }
+  chip.onclick = (e) => { e.stopPropagation(); setOpen(true); };
+  $("brightMin" + S).onclick = (e) => { e.stopPropagation(); setOpen(false); };
+  range.oninput = (e) => set(e.target.value);
+  $("brightReset" + S).onclick = () => set(BRIGHT_DEFAULT);   // 指示 25 節
+  wrap.addEventListener("click", (e) => e.stopPropagation());
+  render();
+  // 自動確認から直接動かせるようにしておく
+  pane.setBrightness = set;
+  pane.setBrightOpen = setOpen;
+}
+bindBrightness(paneL, "L");
+bindBrightness(paneR, "R");
+// 前回「最小化」で終えていたらその状態を復元する (追加指示 7 節)。
+// 記録が無ければ展開のまま = 初回は必ず展開。
+(function restoreBrightMinimized() {
+  const m = loadBrightMinimized();
+  if (m.L && paneL) paneL.setBrightOpen(false);
+  if (m.R && paneR) paneR.setBrightOpen(false);
+})();
+
+/* --------------------------------------------------------------------------
+ * 等高線の ON/OFF と色 (指示 6-12 節)
+ *
+ * ★★ visibility:none を使ってはいけない ★★
+ *   水位クリック (nearestContour)・測線の標高ラベル (collectHits)・
+ *   DEM 障害帯の抑止 (contoursVisible) は 3 つとも
+ *   queryRenderedFeatures({layers: CONTOUR_LAYERS}) に乗っている。
+ *   visibility:none にすると queryRenderedFeatures が空を返し、この 3 つが
+ *   同時に壊れる。しかも contoursVisible() が false になるので、
+ *   **等高線を消しただけで DEM 障害の帯が出る**。
+ *   実測 (_probe/probe_contour_hide.py / 青木作 z18):
+ *     line-opacity:0  -> qrf 418 件 / クリック命中 / contoursVisible() true
+ *     visibility:none -> qrf   0 件 / クリック外れ / contoursVisible() false
+ *   したがって OFF は **描画レイヤの line-opacity を 0 にするだけ**にして、
+ *   source も feature も残す (指示 9 節)。
+ *
+ * ★ 選択等高線 (contour-selected) は OFF でも消さない。指示 8 節が消すのは
+ *   通常等高線・主曲線・等高線ラベルの 3 つで、選択線は挙がっていない。
+ *   線を減らしたうえで選んだ水位だけを見たい場面があるので残す方が役に立つ。
+ *
+ * ★ 色変更は setPaintProperty だけ。DEM 再取得も contour 再計算も
+ *   Map 再生成もしない (指示 12 節)。
+ * -------------------------------------------------------------------------- */
+function applyContourStyle() {
+  const cs = contourPaint();
+  for (const m of MAPS) {
+    if (m.getLayer(CONTOUR_MINOR_LAYER)) {
+      m.setPaintProperty(CONTOUR_MINOR_LAYER, "line-color", cs.minor.color);
+      m.setPaintProperty(CONTOUR_MINOR_LAYER, "line-opacity", contourOn ? cs.minor.opacity : 0);
+    }
+    if (m.getLayer(CONTOUR_INDEX_LAYER)) {
+      m.setPaintProperty(CONTOUR_INDEX_LAYER, "line-color", cs.index.color);
+      m.setPaintProperty(CONTOUR_INDEX_LAYER, "line-opacity", contourOn ? cs.index.opacity : 0);
+    }
+  }
+  console.log("[v1.6] contour style: on=" + contourOn + " color=" + contourStyleKey);
+  refreshAxisLabels();          // 指示 8 節: OFF ならラベルも消す
+}
+// checkbox は再読み込みで前回の状態が復元されることがあるので、JS 側の既定で上書きする
+$("ctOn").checked = contourOn;
+$("ctColor").value = contourStyleKey;
+$("ctOn").onchange = (e) => { contourOn = e.target.checked; applyContourStyle(); };
+$("ctColor").onchange = (e) => {
+  contourStyleKey = CONTOUR_STYLES[e.target.value] ? e.target.value : CONTOUR_STYLE_DEFAULT;
+  applyContourStyle();
+};
+
+/* --------------------------------------------------------------------------
+ * 診断パネルの折りたたみ (指示 13-17 節)
+ * 初期状態は必ずチップ。異常が出ても自動では展開しない (指示 17 節)。
+ * DEM 取得失敗のユーザー向け表示は従来どおり demwarn の帯が受け持つ。
+ * -------------------------------------------------------------------------- */
+function setDiagOpen(open) {
+  $("panel-diag").classList.toggle("open", open);
+  $("diag-chip").style.display = open ? "none" : "";
+  $("diag-chip").setAttribute("aria-expanded", open ? "true" : "false");
+}
+setDiagOpen(false);
+$("diag-chip").onclick = () => setDiagOpen(true);
+$("diagClose").onclick = () => setDiagOpen(false);
+$("diag-title").onclick = () => setDiagOpen(false);
+
+/** チップの ✓ / ⚠。重大な異常があるかどうかだけを色と記号で見せる。
+ *  ★ showError() からも呼ぶので、12 節の fetched / demWarnShown がまだ
+ *    初期化される前に走ることがある (ため池 JSON の読込失敗など)。
+ *    そこで参照は try で囲む。DOM の状態だけでも判定はできる。 */
+function updateDiagMark() {
+  const chip = $("diag-chip");
+  if (!chip) return;
+  let bad = $("d-err").textContent.trim() !== ""
+    || $("d-ponds").className === "ng"
+    || $("d-range").className === "ng";
+  try { if (demWarnShown || fetched.fail > 0) bad = true; } catch (e) { /* まだ未初期化 */ }
+  $("diag-mark").textContent = bad ? "⚠" : "✓";
+  chip.classList.toggle("alert", bad);
+  chip.title = bad ? "異常あり。押すと詳細" : "正常。押すと詳細";
+}
 
 $("panesBtn").onclick = () => {
   const q = new URLSearchParams(location.search);
@@ -1426,8 +2492,10 @@ function renderFetched() {
   fe.textContent = fetched.fail + " 枚 (範囲外 " + fetched.outside
                  + " / 中断 " + fetched.aborted + ")";
   fe.className = fetched.fail ? "ng" : "";
+  updateDiagMark();
 }
 renderFetched();
+renderBmMiss();
 
 /* DEM 取得失敗のユーザー表示 (指示 22-24 節)。
  *
@@ -1463,6 +2531,7 @@ function setDemWarn(on, why) {
   $("demwarn").style.display = on ? "block" : "none";
   if (on) console.error("[v1.8-q] 等高線データを取得できません:", why);
   else console.info("[v1.8-q] 等高線の取得が回復しました");
+  updateDiagMark();
 }
 /** いま等高線が描けているか。描けていれば警告は要らない。 */
 function contoursVisible() {
@@ -1479,6 +2548,7 @@ function reviewDemWarn(why) {
   }
   const el = $("d-range");
   if (demWarnShown) { el.className = "ng"; el.textContent = "NG (連続失敗 " + demFailStreak + ")"; }
+  updateDiagMark();
 }
 function noteContourOk() {
   demFailStreak = 0;
@@ -1531,8 +2601,10 @@ $("resetBtn").onclick = () => {
   fetched.fail = fetched.aborted = fetched.outside = 0;
   demUrlsSeen.clear();
   demFailStreak = 0;
+  bmMiss = 0;
   performance.clearResourceTimings();
   renderFetched();
+  renderBmMiss();
 };
 
 /* 起動時に DEM へ 1 枚だけ当てて、接続と CORS を確かめる。
@@ -1554,6 +2626,7 @@ $("resetBtn").onclick = () => {
       el.className = "ok";
       el.textContent = "OK (" + fmtBytes(buf.byteLength) + ")";
       console.info("[v1.8-q] DEM 接続確認 OK:", url);
+      updateDiagMark();
     } else {
       el.className = "ng"; el.textContent = "NG (HTTP " + res.status + ")";
       setDemWarn(true, "DEM HTTP " + res.status + " " + url);
