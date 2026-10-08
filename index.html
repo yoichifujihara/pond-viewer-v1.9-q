@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ため池災害前後比較ビューア 試行版 | v1.9.1-q</title>
+<!-- 版: 公開画面の表記は v1.9-q、内部の開発版は v1.9.2-q (APP_BUILD)。
+     公開先は pond-viewer-v1.9-q のまま (URL は変えない運用)。 -->
+<meta name="pondatlas-build" content="v1.9.2-q">
+<title>ため池災害前後比較ビューア 試行版 | v1.9-q</title>
 <!-- v1.9-q: 外部 CDN (unpkg) をやめ、MapLibre GL JS 5.24.0 を vendor/ へ同梱した。
      公開サイトの表示を自分たちの管理下に置くため。LICENSE も同梱している。
 
@@ -13,7 +16,14 @@
      (3) 診断パネルを既定で折りたたみ
      (4) 左右それぞれ独立した明るさ調整 (背景ラスタだけに効く)
      (5) 右画面に地理院の 2024/1/2・1/5・1/14 撮影画像を追加
-     v1.9-q は凍結したまま。ここは別リポジトリの別ツリー。 -->
+     v1.9-q は凍結したまま。ここは別リポジトリの別ツリー。
+
+     v1.9.2-q: 見え方と操作の改善。
+     (1) 等高線を v1.9.1-q の 60% の線幅へ (細線化を維持)
+     (2) ページ内で 1画面 / 2画面を切り替え、1画面では左右比較・上下比較のスワイプ
+     v1.9.2-q 内の再調整: 一度入れた「測線 1 本・回転」と斜めスワイプを取り消した。
+         測線は v1.9.1-q の仕様 (画面中央の縦・横) へ復元 (復元元 commit fce793f)。
+     公開画面の版表記は v1.9-q のまま (公開先 pond-viewer-v1.9-q)。 -->
 <link rel="stylesheet" href="./vendor/maplibre-gl.css">
 <style>
 :root { --bar:#1e2a38; --fg:#f2f2f2; --panel:rgba(24,26,30,0.88);
@@ -53,8 +63,14 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 
 /* ---- ため池検索 (技術検証用の最小 UI) ----------------------------------- */
 #searchWrap { position:relative; }
-#q { width:180px; }
-#qCount { color:#9fb0c0; font-size:11px; margin-left:4px; }
+/* v1.9.2-q: 「絞り込み」「1画面」「スワイプ」を足したぶん 180 -> 110px に詰めた
+ * (上部バーは 1400px 窓で溢れた。overflow-x:auto なので崩れず気づけない) */
+#q { width:110px; }
+/* v1.9.2-q: 件数は上部バーではなく候補リストの先頭行に出す (.hd)。
+ * 上部バーに出すと「1507 件」の幅で 1400px 窓から溢れる。#qCount は値だけ持つ。 */
+#qCount { display:none; }
+#results .hd { padding:4px 9px; color:#9fb0c0; font-size:11px;
+  border-bottom:1px solid rgba(255,255,255,.12); }
 /* ★ position:fixed にしてある。#topbar は overflow-x:auto なので、
  *   その中で position:absolute にすると候補リストが 44px の高さで
  *   切り取られて読めなくなる (CSS 上 overflow-x:auto は overflow-y を
@@ -70,6 +86,36 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 #results .r .sub { color:#9fb0c0; font-size:11px; }
 #results .none { padding:7px 9px; color:#fca5a5; font-size:12px; }
 #results .more { padding:5px 9px; color:#9fb0c0; font-size:11px; }
+#results .r .vol { color:#fcd34d; }
+
+/* ---- v1.9.2-q: 市町・総貯水量による絞り込み ------------------------------
+ * 上部バーには「絞り込み」ボタンだけを置き、条件はこのパネルで入れる
+ * (上部バーは 1400px で余裕が 14px しかない)。#results と同じく position:fixed。 */
+#filterBtn { padding:2px 7px; }
+#filterPanel { position:fixed; z-index:41; top:46px; left:0; width:292px; display:none;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.45);
+  padding:9px 11px; font-size:12px; line-height:1.5; }
+#filterPanel.open { display:block; }
+#filterPanel .ttl { font-weight:700; color:var(--accent); margin-bottom:6px; }
+#filterPanel .row { display:flex; align-items:center; gap:5px; margin:5px 0; flex-wrap:wrap; }
+#filterPanel .cap { color:#9fb0c0; width:52px; flex:0 0 auto; }
+#filterPanel select, #filterPanel input, #filterPanel button {
+  font:inherit; font-size:12px; padding:2px 6px; border-radius:4px;
+  border:1px solid #55697e; background:#2b3a4c; color:#fff; }
+#filterPanel select { flex:1 1 auto; min-width:0; }
+#filterPanel input[type="number"] { width:62px; }
+#filterPanel button { cursor:pointer; }
+#filterPanel .presets { margin-left:57px; gap:4px; }
+#filterPanel .presets button { font-size:11px; padding:1px 6px; background:rgba(255,255,255,.08);
+  border-color:var(--line); }
+#filterPanel .presets button[aria-pressed="true"] { background:var(--accent); color:#0b1620;
+  border-color:var(--accent); }
+#filterPanel .cnt { margin:7px 0 4px; font-weight:700; }
+#filterPanel .cnt.zero { color:#fca5a5; }
+#filterPanel .acts { justify-content:flex-start; }
+#filterPanel .acts .close { margin-left:auto; }
+#filterPanel .note { color:#9fb0c0; font-size:11px; margin:6px 0 0; }
 
 #wrap { display:flex; height:calc(100% - 44px - 30px); }
 .pane { flex:1 1 0; position:relative; min-width:0; }
@@ -80,10 +126,13 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 
 /* ---- v1.5 から: 測線・標高ラベル・同期カーソルの重ね描き ---------------- */
 .overlay { position:absolute; inset:0; z-index:4; pointer-events:none; overflow:hidden; }
+/* 測線は v1.9.1-q のまま (画面中央固定の縦・横)。v1.9.2-q で一度 1 本・回転式に
+ * したが、利用者の判断で取り消した (復元元 commit fce793f)。 */
 .axis { position:absolute; background:none; }
 .axis-v { left:50%; width:0; border-left:1px dashed var(--sel); opacity:.55; }
 .axis-h { top:50%; height:0; border-top:1px dashed var(--sel); opacity:.55; }
-.axis-c { position:absolute; left:50%; top:50%; width:11px; height:11px; margin:-6px 0 0 -6px;
+/* 測線の交点の丸。v1.9.2-q で 11px -> 7px (約 6 割) に縮めた (利用者の指摘)。 */
+.axis-c { position:absolute; left:50%; top:50%; width:7px; height:7px; margin:-3.5px 0 0 -3.5px;
   border:1px solid var(--sel); border-radius:50%; opacity:.8; }
 .ct-label { position:absolute; left:0; top:0; white-space:nowrap; transform-origin:center;
   color:var(--lbl-fg); font-size:12px; font-weight:700; line-height:1;
@@ -207,6 +256,46 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 #tileDlgBack { position:fixed; inset:0; z-index:60; display:none;
   background:rgba(0,0,0,0.45); backdrop-filter:blur(2px); }
 #tileDlgBack.open { display:block; }
+
+/* ---- v1.9.2-q: 「このサイトでできること」の案内カード --------------------
+ * 開くたびに出す (「次回から表示しない」に印を付けたら出さない)。
+ * 外部タイルのダイアログと同じ作り (半透明の背景 + 中央のカード)。
+ * 開き直す入口はステータスバー左のヒント (上部バーの幅は使わない)。 */
+#introBack { position:fixed; inset:0; z-index:70; display:none;
+  background:rgba(0,0,0,0.45); backdrop-filter:blur(2px); }
+#introBack.open { display:block; }
+#intro { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:min(540px, calc(100vw - 32px)); max-height:calc(100vh - 48px); overflow-y:auto;
+  background:#1b2430; color:var(--fg); border:1px solid var(--line); border-radius:10px;
+  box-shadow:0 16px 48px rgba(0,0,0,0.6); font-size:13px; line-height:1.6; }
+#intro h2 { margin:0; padding:12px 16px 4px; font-size:16px; display:flex; align-items:flex-start; gap:8px; }
+#intro h2 button { margin-left:auto; font:inherit; font-size:16px; line-height:1;
+  padding:2px 8px; cursor:pointer; color:var(--fg); background:transparent;
+  border:1px solid var(--line); border-radius:4px; }
+#intro .lead { margin:0; padding:0 16px 10px; color:#c9d4de; border-bottom:1px solid var(--line); }
+#intro ol { list-style:none; margin:0; padding:10px 16px 4px; }
+#intro li { display:grid; grid-template-columns:28px 76px 1fr; gap:4px 8px; align-items:baseline;
+  padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.06); }
+#intro li .no { width:22px; height:22px; border-radius:50%; background:var(--accent); color:#0b1620;
+  font-weight:700; font-size:12px; line-height:22px; text-align:center; align-self:center; }
+#intro li .what { font-weight:700; color:#fff; }
+#intro li .how { color:#c9d4de; }
+#intro .ui { display:inline-block; padding:0 5px; margin:0 1px; border:1px solid #55697e;
+  border-radius:4px; background:#2b3a4c; color:#fff; font-size:12px; line-height:1.5; white-space:nowrap; }
+#intro .first { margin:10px 16px 0; padding:8px 12px; border-radius:8px;
+  background:rgba(125,211,252,0.12); border:1px solid rgba(125,211,252,0.35); }
+#intro .first b { color:var(--accent); }
+#intro .foot { display:flex; align-items:center; gap:12px; padding:12px 16px; flex-wrap:wrap; }
+#intro .foot .primary { font:inherit; font-size:14px; font-weight:700; padding:6px 20px;
+  border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#0b1620; cursor:pointer; }
+#intro .foot label { display:flex; align-items:center; gap:6px; color:#9fb0c0; font-size:12px; cursor:pointer; }
+#intro .foot .again { color:#9fb0c0; font-size:11px; flex-basis:100%; }
+@media (max-width: 520px) {
+  #intro li { grid-template-columns:28px 1fr; }
+  #intro li .how { grid-column:2; }
+}
+#statusbar .hint { cursor:pointer; }
+#statusbar .hint:hover { background:#0369a1; }
 #tileDlg { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
   width:min(560px, calc(100vw - 32px)); max-height:calc(100vh - 48px); overflow-y:auto;
   background:#1b2430; color:var(--fg); border:1px solid var(--line); border-radius:10px;
@@ -298,17 +387,83 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
   font-size:13px; font-weight:bold; line-height:1.5; display:none;
   box-shadow:0 2px 8px rgba(0,0,0,0.35); pointer-events:none; }
 #demwarn span { display:block; font-weight:normal; font-size:11px; opacity:.85; }
+
+/* ---- v1.9.2-q: ページ内の 1画面 / 2画面 と スワイプ比較 ---------------------
+ *
+ * 右の Map は作り直さない。1画面では右ペインを左ペインに重ねるだけ。
+ *   1画面          右ペインを重ねて visibility:hidden (見えない・触れない)
+ *   1画面スワイプ  右ペインを重ねて見せ、右地図の canvas コンテナだけを
+ *                  clip-path で境界の片側に切り抜く
+ * 両地図は同じ大きさ・同じ center/zoom (link() の同期) なので、境界の両側で
+ * 同じ地点が同じ画素に来る。境界は縦 (左右比較) か横 (上下比較) で、地図は回さない。
+ *
+ * ★ clip-path をかけるのは #mapR ではなく、その中の canvas コンテナ。
+ *   #mapR ごと切ると、右地図の出典表示とズームボタンまで切り取られる。
+ * ★ #paneR は pointer-events:none にして、境界の基準側のクリックを左地図へ通す。
+ *   pointer-events は継承するので、触らせたい子要素は auto を明示する。 */
+#wrap { position:relative; }
+body.vm-single #paneR { position:absolute; inset:0; border-left:0; visibility:hidden; }
+body.vm-single #paneL .pane-label { display:none; }
+body.vm-swipe #paneR { visibility:visible; pointer-events:none; }
+body.vm-swipe #paneR > * { pointer-events:auto; }
+body.vm-swipe #paneR .pane-label,
+body.vm-swipe #paneR .overlay { display:none; }
+body.vm-swipe #mapR { pointer-events:none; background:transparent; }
+body.vm-swipe #mapR .maplibregl-canvas-container { pointer-events:auto; }
+/* 左地図の出典・縮尺・ズームは右地図のものと同じ場所に重なるので隠す。
+ * 右地図の出典は等高線 source の ATTRIB を必ず含み、背景の出典も載るので
+ * 表記は欠けない (等高線・DEM・地理院・林野庁)。 */
+body.vm-swipe #paneL .maplibregl-control-container { display:none; }
+/* 明るさは左右とも左下。重ならないよう右側の分を横へずらす。 */
+body.vm-swipe #brightR { left:232px; }
+body.vm-swipe .ghost { display:none !important; }
+
+/* 境界は縦 (左右比較) か横 (上下比較) の 2 通りだけ。ハンドルは 1 つ (移動)。
+ * 測線 (overlay, z-index:4) には操作できる部品が無いので、境界の UI を上 (5) に置く。 */
+#swipeUI { position:absolute; inset:0; z-index:5; pointer-events:none; overflow:hidden; display:none; }
+body.vm-swipe #swipeUI { display:block; }
+#swLine { position:absolute; left:0; top:0; background:#fff; box-shadow:0 0 0 1px rgba(0,0,0,.55); }
+.sw-h { position:absolute; left:0; top:0; pointer-events:auto; touch-action:none; user-select:none;
+  border-radius:50%; background:#fff; color:#1e2a38; border:2px solid #1e2a38;
+  box-shadow:0 1px 6px rgba(0,0,0,.5); text-align:center; }
+#swMove { width:26px; height:26px; margin:-13px 0 0 -13px; cursor:ew-resize;
+  font:700 13px/22px system-ui,sans-serif; }
+body.sw-tb #swMove { cursor:ns-resize; }
+.sw-h:hover, .sw-h.drag { background:var(--accent); }
+/* 「基準／比較」のラベルは 1 つの箱にまとめて置く (位置は 10-3 節の layoutTags)。
+ *   左右比較  地図の下部に横並び   上下比較  地図の左側に縦並び
+ * 境界の位置には連動させない (境界を動かしても動かない)。 */
+#swTags { position:absolute; left:0; top:0; display:flex; flex-direction:row; flex-wrap:wrap;
+  gap:6px; align-items:center; }
+body.sw-tb #swTags { flex-direction:column; align-items:flex-start; }
+.sw-tag { white-space:nowrap;
+  max-width:220px; overflow:hidden; text-overflow:ellipsis;
+  background:rgba(30,42,56,.88); color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; }
+.sw-tag b { color:var(--accent); font-weight:700; }
+
+#swipeBar { position:absolute; z-index:8; top:8px; left:50%; transform:translateX(-50%);
+  display:none; align-items:center; gap:4px; white-space:nowrap;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px;
+  padding:3px 6px; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,.3); }
+body.vm-swipe #swipeBar { display:flex; }
+#swipeBar button { font:inherit; font-size:11px; padding:1px 6px; border-radius:4px;
+  border:1px solid var(--line); background:rgba(255,255,255,.08); color:var(--fg); cursor:pointer; }
+#swipeBar button[aria-pressed="true"] { background:var(--accent); color:#0b1620; border-color:var(--accent); }
+#topbar button[aria-pressed="true"] { background:var(--accent); color:#0b1620; border-color:var(--accent); }
 </style>
 </head>
 <body>
 
 <div id="topbar">
-  <span class="brand"><b>ため池災害前後比較ビューア 試行版</b><span class="ver">GitHub Pages 試験運用版 v1.9.1-q</span></span>
+  <span class="brand"><b>ため池災害前後比較ビューア 試行版</b><span class="ver" title="内部版 v1.9.2-q">GitHub Pages 試験運用版 v1.9-q</span></span>
   <span id="searchWrap">
     <input id="q" type="search" placeholder="ため池名で検索" autocomplete="off">
     <span id="qCount"></span>
     <div id="results"></div>
   </span>
+  <!-- v1.9.2-q: 市町・総貯水量で絞り込む。条件のパネルは #filterPanel -->
+  <button id="filterBtn" type="button" aria-pressed="false" aria-expanded="false"
+          title="ため池を市町・総貯水量で絞り込む (地図の表示と検索候補に効く)">絞り込み</button>
   <button id="homeBtn">全域へ戻る</button>
   <!-- ★ autocomplete="off" は必須。付けないと Chrome が再読み込み時に
        「前回選んでいた値」へ勝手に戻すので、**select の表示と地図の中身が
@@ -335,7 +490,11 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
     <option value="none">なし</option>
   </select></label>
   <span class="spacer"></span>
-  <button id="panesBtn">1画面で計測</button>
+  <!-- v1.9.2-q: 画面数はページ内で切り替える (設定が初期化されない)。
+       スワイプは 1画面で基準 (左) と比較 (右) を境界の両側に重ねて見比べる。 -->
+  <button id="panesBtn" type="button" title="1画面 / 2画面を切り替える">1画面</button>
+  <button id="swipeBtn" type="button" aria-pressed="false"
+          title="1画面で左右の画像を境界の両側に重ねて比べる">スワイプ</button>
 </div>
 
 <div id="wrap">
@@ -410,17 +569,80 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
       </div>
     </div>
   </div>
+  <!-- v1.9.2-q: スワイプ比較の境界。左右比較 = 縦の境界を左右へ / 上下比較 = 横の境界を上下へ。
+       左 (上) が基準 = 左画面の地図、右 (下) が比較 = 右画面の地図。測線とは独立。 -->
+  <div id="swipeUI" aria-hidden="true">
+    <div id="swLine"></div>
+    <div id="swTags"><div class="sw-tag" id="swTagBase"></div><div class="sw-tag" id="swTagCmp"></div></div>
+    <div class="sw-h" id="swMove" title="ドラッグで境界を動かす">⇔</div>
+  </div>
+  <div id="swipeBar" role="group" aria-label="スワイプの向き">
+    <button type="button" data-dir="lr" aria-pressed="true"
+            title="縦の境界を左右へ動かす。左が基準、右が比較">左右比較</button>
+    <button type="button" data-dir="tb" aria-pressed="false"
+            title="横の境界を上下へ動かす。上が基準、下が比較">上下比較</button>
+  </div>
 </div>
 
 <div id="statusbar">
-  <span class="hint">ため池を選ぶ → 等高線をクリックで水位</span>
+  <span class="hint" role="button" tabindex="0"
+        title="このサイトでできること (案内を開く)">ため池を選ぶ → 等高線をクリックで水位 ？</span>
   <span>選択池: <b id="s-pond">未選択</b></span>
   <span>水位: <b id="wl">未選択</b></span>
-  <button id="clearWL">水位解除</button>
-  <span>等高線: <span id="h-dataset">-</span></span>
+  <button id="clearWL">水位解除</button>  <span>等高線: <span id="h-dataset">-</span></span>
   <span id="cursorPos"></span>
   <span class="src">出典: 国土地理院タイル / 林野庁 能登地域2024 DEM (PDL1.0) / ため池: <span id="s-src">-</span>
     / 等高線生成: maplibre-contour (numpng 対応版, BSD-3-Clause)</span>
+</div>
+
+<div id="introBack" role="dialog" aria-modal="true" aria-labelledby="introTitle">
+  <div id="intro">
+    <h2 id="introTitle">このサイトでできること
+      <button type="button" id="introClose" aria-label="閉じる">×</button></h2>
+    <p class="lead">能登のため池 <span id="introN">1,507</span> 池について、災害前後の写真や地形図を見比べ、等高線から水位を読み取るための地図です。</p>
+    <ol>
+      <li><span class="no">1</span><span class="what">探す</span>
+        <span class="how">名前で検索 <span class="ui">ため池名で検索</span>。市町や総貯水量で
+          <span class="ui">絞り込み</span>。地図の青い丸を押しても選べます</span></li>
+      <li><span class="no">2</span><span class="what">見比べる</span>
+        <span class="how">左右 2 画面で同じ場所を表示します。背景は <span class="ui">左:</span>
+          <span class="ui">右:</span> で選択。<span class="ui">スワイプ</span> で 1 画面に重ねて比較</span></li>
+      <li><span class="no">3</span><span class="what">水位を読む</span>
+        <span class="how">ため池を選んで拡大すると等高線が出ます。等高線をクリックすると、その標高が「水位」になり左右で強調されます</span></li>
+      <li><span class="no">4</span><span class="what">見やすくする</span>
+        <span class="how"><span class="ui">等高線</span> の色・表示、各画面左下の明るさ、
+          <span class="ui">＋ 外部タイル</span> で災害後の写真を追加</span></li>
+    </ol>
+    <div class="first"><b>まずは:</b> 検索欄に「青木作」と入れて候補を選び、拡大された地図で等高線をクリックしてみてください。</div>
+    <div class="foot">
+      <button type="button" class="primary" id="introStart">はじめる</button>
+      <label><input type="checkbox" id="introHide" autocomplete="off"> 次回から表示しない</label>
+      <span class="again">この案内は、画面下の青いヒント「…水位 ？」を押すといつでも開けます。</span>
+    </div>
+  </div>
+</div>
+
+<div id="filterPanel" role="dialog" aria-label="ため池の絞り込み">
+  <div class="ttl">ため池の絞り込み</div>
+  <div class="row"><span class="cap">市町</span>
+    <select id="fCity" autocomplete="off"><option value="">すべて</option></select></div>
+  <div class="row"><span class="cap">総貯水量</span>
+    <input id="fVolMin" type="number" min="0" step="any" placeholder="下限" autocomplete="off"
+           aria-label="総貯水量の下限 (千m³)"> 〜
+    <input id="fVolMax" type="number" min="0" step="any" placeholder="上限" autocomplete="off"
+           aria-label="総貯水量の上限 (千m³)"> 千m³</div>
+  <div class="row presets">
+    <button type="button" data-min="" data-max="1">〜1</button>
+    <button type="button" data-min="1" data-max="10">1〜10</button>
+    <button type="button" data-min="10" data-max="100">10〜100</button>
+    <button type="button" data-min="100" data-max="">100〜</button></div>
+  <div class="cnt" id="fCount">-</div>
+  <div class="row acts">
+    <button type="button" id="fFit" title="条件に合うため池がすべて入るように地図を動かす">該当範囲へ移動</button>
+    <button type="button" id="fClear">条件をクリア</button>
+    <button type="button" id="fClose" class="close">閉じる</button></div>
+  <p class="note">下限以上・上限未満。地図上のため池と検索候補の両方に効きます。
+    検索欄が空のときは、条件に合う池を総貯水量の大きい順に出します。</p>
 </div>
 
 <div id="nodata"></div>
@@ -499,6 +721,10 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 <script>
 "use strict";
 const T0 = performance.now();
+// 内部の開発版と、画面に出す公開版。公開表記は据え置く運用 (v1.9.2-q 指示 2 節)。
+const APP_BUILD = "v1.9.2-q";
+const APP_PUBLIC_VERSION = "v1.9-q";
+console.log("[v1.6] build " + APP_BUILD + " (公開表記 " + APP_PUBLIC_VERSION + ")");
 
 /* --- コメント中の「指示 N 節」について ------------------------------------
  * このファイルは v1.4 から版を重ねていて、コメントの「指示 N 節」は
@@ -825,6 +1051,20 @@ const CONTOUR_STYLES = {
                           index: { color: "#000000", opacity: 1.00 } },
 };
 const CONTOUR_STYLE_DEFAULT = "std";
+
+/* --- v1.9.2-q: 等高線の線幅 (指示 3 節) -------------------------------------
+ * 航空写真を覆いすぎないよう、v1.9.1-q の線幅に CONTOUR_WIDTH_SCALE を掛ける。
+ * ズーム連動の折れ点 (z11/14/16/20) と、通常線 : 主曲線の比は v1.9.1-q のまま。
+ * 選択等高線 (contour-selected) は水位を読む識別線なので細くしない。
+ * 色・不透明度・間隔・DEM の扱いは一切変えていない。 */
+const CONTOUR_WIDTH_SCALE = 0.6;
+const CONTOUR_WIDTH_MINOR = [[11, 0.4], [14, 0.6], [16, 0.9], [20, 1.6]];   // v1.9.1-q の値
+const CONTOUR_WIDTH_INDEX = [[11, 0.9], [14, 1.4], [16, 2.0], [20, 3.4]];   // v1.9.1-q の値
+function contourWidthExpr(stops) {
+  const e = ["interpolate", ["linear"], ["zoom"]];
+  for (const [z, w] of stops) e.push(z, +(w * CONTOUR_WIDTH_SCALE).toFixed(3));
+  return e;
+}
 let contourOn = true;                       // 指示 6 節: 既定は表示
 let contourStyleKey = CONTOUR_STYLE_DEFAULT;
 const contourPaint = () => CONTOUR_STYLES[contourStyleKey] || CONTOUR_STYLES.std;
@@ -938,6 +1178,9 @@ function buildPondData(json) {
     id++;
     // 検索用の小文字キー。全文検索ライブラリは入れない (単純な部分一致で足りる)
     p._key = (p.name + " " + p.city + " " + p.addr).toLowerCase();
+    // v1.9.2-q: 絞り込み用の現在の市町名。「輪島市（鳳至郡門前町）」の括弧 (旧町村) と
+    // 「羽咋郡」などの郡名を外す -> 「輪島市」「志賀町」。元の city は書き換えない。
+    p._muni = p.city.split("（")[0].replace(/^.+?郡/, "").trim() || "(不明)";
   }
   pondStats.valid = PONDS.length;
   pondStats.dropped = dropped.length;
@@ -973,6 +1216,7 @@ function buildPondData(json) {
     console.warn("[v1.6] 座標が使えないため除外したレコード (先頭 5 件)", dropped.slice(0, 5));
   }
   $("d-ponds").textContent = pondStats.valid + " / " + pondStats.total + " 池";
+  $("introN").textContent = pondStats.valid.toLocaleString("ja-JP");   // 案内カードの池数
   $("s-src").textContent = pondStats.source;
 }
 
@@ -1180,7 +1424,7 @@ function buildStyle(basemapKey) {
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": cs.minor.color, "line-opacity": contourOn ? cs.minor.opacity : 0,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.4, 14, 0.6, 16, 0.9, 20, 1.6],
+          "line-width": contourWidthExpr(CONTOUR_WIDTH_MINOR),
         },
       },
       {
@@ -1190,7 +1434,7 @@ function buildStyle(basemapKey) {
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": cs.index.color, "line-opacity": contourOn ? cs.index.opacity : 0,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.9, 14, 1.4, 16, 2.0, 20, 3.4],
+          "line-width": contourWidthExpr(CONTOUR_WIDTH_INDEX),
         },
       },
       {
@@ -1235,10 +1479,12 @@ function buildStyle(basemapKey) {
       {
         id: POND_SELECTED_LAYER, type: "circle", source: "ponds",
         filter: selectedPondFilter(null),
+        // v1.9.2-q: 選択中は色だけを変え、大きさ (半径・縁の太さ) は通常のため池と同じ。
+        // 大きくすると池そのものに被って見えにくい (利用者の指摘)。
         paint: {
           "circle-color": "#f59e0b", "circle-opacity": 1.0,
-          "circle-stroke-color": "#7c2d12", "circle-stroke-width": 2.5,
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 6, 13, 8, 16, 11, 20, 14],
+          "circle-stroke-color": "#7c2d12", "circle-stroke-width": 1.2,
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 3, 13, 4.5, 16, 6, 20, 8],
         },
       },
     ]),
@@ -1310,7 +1556,9 @@ const MAPS = mapR ? [mapL, mapR] : [mapL];
 
 if (PANES === 1) {
   $("paneR").querySelector(".pane-label").textContent = "右 (1画面計測のため無効)";
-  $("panesBtn").textContent = "2画面へ戻す";
+  // v1.9.2-q: 「2画面へ戻す」だと上部バーが 17px 溢れる (スワイプのボタンを足したため)
+  $("panesBtn").textContent = "2画面";
+  $("panesBtn").title = "計測モード (?panes=1) を終えて 2画面で開き直す";
   $("baseR").disabled = true;
 }
 $("d-panes").textContent = PANES + " 画面";
@@ -1405,6 +1653,7 @@ function selectPond(pond, opts) {
   selectedPond = pond;
   setWaterLevel(null);            // 前の池の水位は必ず捨てる
   applyPondHighlight();
+  if (filterActive() && pondsReady) pushPondsToMaps();   // 選んだ池は条件外でも地図に残す
   renderPondPanel();
   console.log("[v1.6] selectPond:", { pond_id: pond.pond_id, name: pond.name,
     city: pond.city, lat: pond.lat, lon: pond.lon, move: move });
@@ -1422,6 +1671,7 @@ function clearPondSelection(opts) {
   selectedPond = null;
   setWaterLevel(null);
   applyPondHighlight();
+  if (filterActive() && pondsReady) pushPondsToMaps();   // 前に選んでいた条件外の池を外す
   renderPondPanel();
   console.log("[v1.6] clearPondSelection: move=" + move);
   if (move) fitOverview();
@@ -1445,10 +1695,17 @@ $("homeBtn").onclick = () => clearPondSelection();
 
 function searchPonds(term) {
   const q = term.trim().toLowerCase();
-  if (!q) return { hits: [], total: 0 };
+  if (!q) {
+    // v1.9.2-q: 検索語が空でも絞り込み中なら、条件に合う池を総貯水量の大きい順に出す
+    if (!filterActive()) return { hits: [], total: 0 };
+    const all = PONDS.filter(pondPasses);
+    all.sort((a, b) => (b.vol ?? -1) - (a.vol ?? -1) || a.name.localeCompare(b.name, "ja"));
+    return { hits: all.slice(0, SEARCH_MAX_RESULTS), total: all.length };
+  }
   const hits = [];
   let total = 0;
   for (const p of PONDS) {
+    if (!pondPasses(p)) continue;            // v1.9.2-q: 市町・総貯水量の絞り込み
     // 名称を最優先。見つからなければ市町・住所も見る (指示 16)
     const inName = p.name.toLowerCase().indexOf(q) >= 0;
     if (!inName && p._key.indexOf(q) < 0) continue;
@@ -1463,20 +1720,26 @@ function searchPonds(term) {
 function renderResults(term) {
   const box = $("results");
   const { hits, total } = searchPonds(term);
-  $("qCount").textContent = term.trim() ? total + " 件" : "";
+  const listing = !!term.trim() || filterActive();
+  $("qCount").textContent = listing ? total + " 件" : "";
   // position:fixed なので、検索欄の今の位置に合わせる (topbar は横スクロールする)
   box.style.left = Math.round($("q").getBoundingClientRect().left) + "px";
-  if (!term.trim()) { box.style.display = "none"; box.innerHTML = ""; return; }
+  if (!listing) { box.style.display = "none"; box.innerHTML = ""; return; }
+  const head = '<div class="hd">' + total + ' 件'
+    + (filterActive() ? ' (絞り込み中)' : '') + '</div>';
   if (!total) {
-    box.innerHTML = '<div class="none">該当なし</div>';
+    box.innerHTML = head + '<div class="none">該当なし</div>';
     box.style.display = "block";
     return;
   }
   // 同名の池が 81 種あるので、名称だけでは選べない。市町と住所を必ず添える。
-  let html = hits.map((p) =>
+  let html = head + hits.map((p) =>
     '<div class="r" data-id="' + p.pond_id + '">' +
       '<span class="nm">' + esc(p.name) + '</span>' +
-      '<div class="sub">' + esc((p.city + " " + p.addr).trim() || "住所不明") + '</div>' +
+      '<div class="sub">' + esc((p.city + " " + p.addr).trim() || "住所不明")
+        // 絞り込み中は判断材料の総貯水量も添える
+        + (filterActive() ? ' <span class="vol">' + esc(fmtVal(p.vol, " 千m³", 1)) + '</span>' : '')
+        + '</div>' +
     '</div>').join("");
   if (total > hits.length) {
     html += '<div class="more">ほか ' + (total - hits.length) + ' 件 (上位 '
@@ -1492,7 +1755,9 @@ function esc(s) {
 }
 
 $("q").addEventListener("input", (e) => renderResults(e.target.value));
-$("q").addEventListener("focus", (e) => { if (e.target.value) renderResults(e.target.value); });
+$("q").addEventListener("focus", (e) => {
+  if (e.target.value || filterActive()) renderResults(e.target.value);
+});
 $("results").addEventListener("click", (e) => {
   const row = e.target.closest(".r");
   if (!row) return;
@@ -1506,6 +1771,141 @@ $("results").addEventListener("click", (e) => {
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#searchWrap")) $("results").style.display = "none";
 });
+
+/* --------------------------------------------------------------------------
+ * 5-2. 市町・総貯水量による絞り込み (v1.9.2-q)
+ *
+ * 条件は地図上のため池 (クラスタ・個別点) と検索候補の両方に効く。
+ * 地図へは ponds source に「条件に合う池だけの FeatureCollection」を setData する
+ * (クラスタも条件に合う池だけで数え直される)。選択中の池は条件から外れても
+ * 地図に残す (強調が消えて見失わないように)。
+ * 総貯水量は「下限以上・上限未満」(千m³)。値が無い池は、総貯水量の条件を
+ * 入れたときだけ外す (いまのデータは 1,507 池すべてに値がある)。
+ * 条件は保存しない (読み直すと解除される)。
+ * -------------------------------------------------------------------------- */
+const pondFilter = { city: "", volMin: null, volMax: null };
+function filterActive() {
+  return !!pondFilter.city || pondFilter.volMin !== null || pondFilter.volMax !== null;
+}
+function pondPasses(p) {
+  if (pondFilter.city && p._muni !== pondFilter.city) return false;
+  if (pondFilter.volMin !== null || pondFilter.volMax !== null) {
+    if (p.vol === null || p.vol === undefined) return false;
+    if (pondFilter.volMin !== null && !(p.vol >= pondFilter.volMin)) return false;
+    if (pondFilter.volMax !== null && !(p.vol < pondFilter.volMax)) return false;
+  }
+  return true;
+}
+/** 地図へ渡すため池。絞り込みが無ければ全件 (v1.6 からの pondFC そのもの)。 */
+function filteredPondFC() {
+  if (!filterActive()) return pondFC;
+  return {
+    type: "FeatureCollection",
+    features: pondFC.features.filter((f) => {
+      const p = PONDS[f.properties.pond_id];
+      return pondPasses(p) || p === selectedPond;
+    }),
+  };
+}
+function readNum(el) {
+  const t = String(el.value).trim();
+  if (t === "") return null;
+  const v = Number(t);
+  return isFinite(v) && v >= 0 ? v : null;
+}
+function fillCitySelect() {
+  const counts = {};
+  for (const p of PONDS) counts[p._muni] = (counts[p._muni] || 0) + 1;
+  const sel = $("fCity");
+  while (sel.options.length > 1) sel.remove(1);
+  // 北から南の順。一覧に無い名前 (データが変わった場合) は後ろに足す
+  const ORDER = ["珠洲市", "輪島市", "能登町", "穴水町", "七尾市", "志賀町", "中能登町",
+                 "羽咋市", "宝達志水町", "かほく市"];
+  const keys = Object.keys(counts).sort((a, b) =>
+    ((ORDER.indexOf(a) + 1) || 99) - ((ORDER.indexOf(b) + 1) || 99) || a.localeCompare(b, "ja"));
+  for (const m of keys) {
+    const o = document.createElement("option");
+    o.value = m;
+    o.textContent = m + " (" + counts[m] + ")";
+    sel.appendChild(o);
+  }
+  sel.value = pondFilter.city;
+}
+function applyPondFilter() {
+  pondFilter.city = $("fCity").value;
+  pondFilter.volMin = readNum($("fVolMin"));
+  pondFilter.volMax = readNum($("fVolMax"));
+  const n = PONDS.filter(pondPasses).length;
+  if (pondsReady) pushPondsToMaps();
+  const on = filterActive();
+  const cnt = $("fCount");
+  cnt.textContent = on ? "該当 " + n + " / " + PONDS.length + " 池" : "全 " + PONDS.length + " 池 (条件なし)";
+  cnt.classList.toggle("zero", on && n === 0);
+  $("filterBtn").setAttribute("aria-pressed", String(on));
+  $("fFit").disabled = !on || n === 0;
+  for (const b of $("filterPanel").querySelectorAll(".presets button")) {
+    const mn = b.dataset.min === "" ? null : Number(b.dataset.min);
+    const mx = b.dataset.max === "" ? null : Number(b.dataset.max);
+    b.setAttribute("aria-pressed", String(mn === pondFilter.volMin && mx === pondFilter.volMax
+                                          && (mn !== null || mx !== null)));
+  }
+  // 候補が開いているか、検索語があるなら作り直す
+  if ($("results").style.display === "block" || $("q").value.trim()) renderResults($("q").value);
+  console.log("[v1.6] pond filter: city=" + (pondFilter.city || "-") + " vol=["
+              + (pondFilter.volMin ?? "") + "," + (pondFilter.volMax ?? "") + ") -> " + n + " 池");
+}
+function setFilterOpen(open) {
+  const panel = $("filterPanel");
+  if (open) {
+    const r = $("filterBtn").getBoundingClientRect();
+    panel.style.left = Math.max(4, Math.min(window.innerWidth - 300, Math.round(r.left))) + "px";
+  }
+  panel.classList.toggle("open", open);
+  $("filterBtn").setAttribute("aria-expanded", String(open));
+}
+$("filterBtn").onclick = (e) => {
+  e.stopPropagation();
+  setFilterOpen(!$("filterPanel").classList.contains("open"));
+};
+$("filterPanel").addEventListener("click", (e) => e.stopPropagation());
+$("fCity").onchange = applyPondFilter;
+$("fVolMin").addEventListener("input", applyPondFilter);
+$("fVolMax").addEventListener("input", applyPondFilter);
+for (const b of $("filterPanel").querySelectorAll(".presets button")) {
+  b.onclick = () => {
+    $("fVolMin").value = b.dataset.min;
+    $("fVolMax").value = b.dataset.max;
+    applyPondFilter();
+  };
+}
+$("fClear").onclick = () => {
+  $("fCity").value = "";
+  $("fVolMin").value = "";
+  $("fVolMax").value = "";
+  applyPondFilter();
+};
+$("fClose").onclick = () => setFilterOpen(false);
+$("fFit").onclick = () => {
+  const hit = PONDS.filter(pondPasses);
+  if (!hit.length) return;
+  let w = Infinity, so = Infinity, e = -Infinity, n = -Infinity;
+  for (const p of hit) {
+    w = Math.min(w, p.lon); e = Math.max(e, p.lon);
+    so = Math.min(so, p.lat); n = Math.max(n, p.lat);
+  }
+  // 左だけ動かす (右は link() で追従)。1 池だけでも寄りすぎないよう z16 で止める
+  mapL.fitBounds([[w, so], [e, n]], { padding: OVERVIEW_PADDING, maxZoom: 16,
+                                      bearing: 0, pitch: 0, duration: 700 });
+};
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#filterPanel") && !e.target.closest("#filterBtn")) setFilterOpen(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("filterPanel").classList.contains("open")) setFilterOpen(false);
+});
+// 自動確認から使う
+window.__filter = { state: pondFilter, apply: applyPondFilter, passes: pondPasses,
+                    fc: filteredPondFC, open: setFilterOpen };
 
 /* ==========================================================================
  * 6. 水位 — v1.5 のまま。左右で 1 つの共有状態
@@ -1642,6 +2042,13 @@ for (const p of PANES_ARR) bindClick(p);
  * 8. 中央測線と標高ラベル — v1.5 のアルゴリズムそのまま (指示 23)
  * ========================================================================== */
 
+// v1.9.2-q: 画面数とスワイプの状態 (使うのは 10-3 節)。測線の描画が参照するのでここで宣言する。
+let viewMode = "dual";            // "dual" | "single"
+let swipeOn = false;              // 1画面のときだけ効く
+const swipe = { dir: "lr", pos: 0.5 };   // lr = 左右比較 (縦の境界) / tb = 上下比較 (横の境界)
+/** その画面の overlay (測線・ラベル) を使うか。1画面では左だけが描く (二重にしない)。 */
+const paneActive = (pane) => pane === paneL || viewMode === "dual";
+
 let axisDir = "both";
 const axisShow = (d) => axisDir === d || axisDir === "both";
 
@@ -1751,7 +2158,7 @@ function markSelectedLabels() {
 /** 測線の見た目。広域 (z < AXIS_MIN_ZOOM) では線ごと隠す。
  *  広域はため池を探す画面で、画面中央の標高を読む意味が無いため (指示 29)。 */
 function layoutAxes(pane, W, H) {
-  const on = axisDir !== "none" && pane.map.getZoom() >= AXIS_MIN_ZOOM;
+  const on = paneActive(pane) && axisDir !== "none" && pane.map.getZoom() >= AXIS_MIN_ZOOM;
   pane.axisV.style.display = on && axisShow("v") ? "block" : "none";
   pane.axisH.style.display = on && axisShow("h") ? "block" : "none";
   pane.axisC.style.display = on && axisDir === "both" ? "block" : "none";
@@ -1769,7 +2176,7 @@ function refreshPane(pane) {
 
   // 等高線 OFF のときは標高ラベルも出さない (指示 8 節)。
   // 測線そのものは layoutAxes で描いたままにする (指示 8 節は測線を消さない)。
-  if (!contourOn || axisDir === "none" || map.getZoom() < LABEL_MIN_ZOOM) {
+  if (!paneActive(pane) || !contourOn || axisDir === "none" || map.getZoom() < LABEL_MIN_ZOOM) {
     pane.labels.innerHTML = "";
     pane.nLabels = 0;
     return 0;
@@ -1828,12 +2235,77 @@ for (const p of PANES_ARR) {
 }
 $("axisDir").onchange = (e) => { axisDir = e.target.value; refreshAxisLabels(); };
 
+/* --------------------------------------------------------------------------
+ * 8-2. ハンドルのドラッグ (スワイプ境界で使う)
+ *
+ * ハンドルは地図の canvas の外 (overlay の上) にあるので、押しても MapLibre には
+ * 届かずパンは始まらない。それでも念のため、ドラッグ中は全地図の dragPan を止め、
+ * 終了・キャンセル (pointercancel / Esc / キャプチャ喪失) で必ず元に戻す。
+ * 同時に 2 つは動かさない (activeOp)。いま動かしている機能はステータスに出す。
+ * リスナーはドラッグごとに付けて外すので、操作を重ねても増えない。
+ * -------------------------------------------------------------------------- */
+let activeOp = null;
+const HINT_DEFAULT = $("statusbar").querySelector(".hint").textContent;
+function beginOp(name) {
+  activeOp = name;
+  for (const m of MAPS) {
+    m.__dragPanWas = m.dragPan.isEnabled();
+    m.dragPan.disable();
+  }
+  $("statusbar").querySelector(".hint").textContent = "操作中: " + name;
+}
+function endOp() {
+  for (const m of MAPS) {
+    if (m.__dragPanWas !== false) m.dragPan.enable();
+    delete m.__dragPanWas;
+  }
+  activeOp = null;
+  $("statusbar").querySelector(".hint").textContent = HINT_DEFAULT;
+}
+function bindDrag(el, opName, h) {
+  el.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || activeOp) return;
+    const ctx = h.start(e);
+    if (ctx === false) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { el.setPointerCapture(e.pointerId); } catch (err) { /* 古いブラウザ */ }
+    el.classList.add("drag");
+    beginOp(opName);
+    let done = false;
+    const mv = (ev) => { if (ev.pointerId === e.pointerId) h.move(ev, ctx); };
+    const finish = (cancelled) => {
+      if (done) return;
+      done = true;
+      el.removeEventListener("pointermove", mv);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", cancel);
+      el.removeEventListener("lostpointercapture", up);
+      document.removeEventListener("keydown", key, true);
+      el.classList.remove("drag");
+      try { el.releasePointerCapture(e.pointerId); } catch (err) { /* 既に外れている */ }
+      endOp();
+      h.end(ctx, cancelled);
+    };
+    const up = () => finish(false);
+    const cancel = () => finish(true);
+    const key = (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); finish(true); } };
+    el.addEventListener("pointermove", mv);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", cancel);
+    el.addEventListener("lostpointercapture", up);
+    document.addEventListener("keydown", key, true);
+  });
+}
+
 /* ==========================================================================
  * 9. 同期カーソル (v1.5 から変更なし)
  * ========================================================================== */
 function bindGhostCursor(from, to) {
   from.map.on("mousemove", (e) => {
     $("cursorPos").textContent = e.lngLat.lat.toFixed(6) + ", " + e.lngLat.lng.toFixed(6);
+    // 1画面 / スワイプでは相手の地図が同じ場所に重なっているので出さない (v1.9.2-q)
+    if (viewMode !== "dual") { to.ghost.style.display = "none"; return; }
     const q = to.map.project(e.lngLat);
     to.ghost.style.left = q.x + "px";
     to.ghost.style.top = q.y + "px";
@@ -1853,6 +2325,7 @@ if (paneR) {
 window.addEventListener("resize", () => {
   for (const m of MAPS) m.resize();
   for (const p of PANES_ARR) p.dirty = true;
+  layoutSwipe();                // v1.9.2-q: 境界は画面に対する比率で持っているので引き直す
   refreshAxisLabels();
 });
 
@@ -1926,6 +2399,8 @@ function setBasemap(pane, key) {
   // 背景を切り替えても明るさは保つ。CSS filter は canvas にかかっていて
   // 背景切替では消えないので本来不要だが、確実にするために呼んでおく。
   applyBrightness(pane);
+  if (pane === paneL) leftBaseKey = key;
+  updateSwipeTags();            // v1.9.2-q: スワイプの「基準 / 比較」ラベルに背景名を出す
 }
 let leftBaseKey = BASE_L_DEFAULT;
 fillBaseSelect($("baseL"), BASE_L_DEFAULT, "left");
@@ -1942,6 +2417,7 @@ function syncControlsToState() {
   if ($("baseR").value !== rightBaseKey) $("baseR").value = rightBaseKey;
   $("ctOn").checked = contourOn;
   $("ctColor").value = contourStyleKey;
+  if ($("axisDir").value !== axisDir) $("axisDir").value = axisDir;
   window.__loadSyncRan = true;
 }
 window.addEventListener("load", syncControlsToState);
@@ -2196,6 +2672,49 @@ if (!mapR) {
   $("tileAddBtn").title = "1画面計測のため無効";
 }
 // 自動確認から使えるようにしておく
+/* ==========================================================================
+ * 10-2b. 「このサイトでできること」の案内カード (v1.9.2-q)
+ *
+ * 開くたびに出す。「次回から表示しない」に印を付けて閉じたときだけ記録し、
+ * 以後は自動では出さない (印を外して閉じればまた毎回出る)。
+ * 記録は localStorage だけ。使えない環境では毎回出る (動作は止めない)。
+ * ?intro=0 で出さない (自動確認・計測用)、?intro=1 で必ず出す。
+ * ========================================================================== */
+const INTRO_KEY = "pondatlas.v1_9_2q.introHidden";
+function introHidden() {
+  try { return localStorage.getItem(INTRO_KEY) === "1"; } catch (e) { return false; }
+}
+function openIntro() {
+  $("introHide").checked = introHidden();
+  $("introBack").classList.add("open");
+  setTimeout(() => $("introStart").focus(), 0);
+}
+function closeIntro() {
+  if (!$("introBack").classList.contains("open")) return;
+  try {
+    if ($("introHide").checked) localStorage.setItem(INTRO_KEY, "1");
+    else localStorage.removeItem(INTRO_KEY);
+  } catch (e) { /* 保存できなくても閉じる */ }
+  $("introBack").classList.remove("open");
+}
+$("introStart").onclick = closeIntro;
+$("introClose").onclick = closeIntro;
+$("introBack").addEventListener("click", (e) => {
+  if (e.target === $("introBack")) closeIntro();          // 外側を押したら閉じる
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("introBack").classList.contains("open")) closeIntro();
+});
+(function bindIntroHint() {
+  const hint = $("statusbar").querySelector(".hint");
+  hint.addEventListener("click", openIntro);
+  hint.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openIntro(); }
+  });
+})();
+if (Q.get("intro") === "1" || (Q.get("intro") !== "0" && !introHidden())) openIntro();
+window.__intro = { open: openIntro, close: closeIntro, hidden: introHidden, key: INTRO_KEY };
+
 window.__tile = { open: openTileDialog, close: closeTileDialog, submit: submitTileForm,
                   del: deleteCustom, list: () => CUSTOM_BASEMAPS.slice(),
                   sample: () => SAMPLE_CUSTOM };
@@ -2367,12 +2886,240 @@ function updateDiagMark() {
   chip.title = bad ? "異常あり。押すと詳細" : "正常。押すと詳細";
 }
 
+/* ==========================================================================
+ * 10-3. 1画面 / 2画面 / スワイプ比較 (v1.9.2-q)
+ *
+ * v1.9.1-q の「1画面で計測」は ?panes=1 を付けてページを開き直すもので、
+ * 右の Map を作らず、背景・明るさ・測線などの設定もすべて初期化されていた。
+ * v1.9.2-q では **ページ内で切り替える**。Map は作り直さず、CSS で右ペインを
+ * 左ペインの上に重ねるだけなので、設定は何も失われず DEM も取り直さない
+ * (等高線タイルは DemSource を左右で共有したまま)。
+ * ?panes=1 は転送量を測るための計測モードとして残してある (右の Map を作らない)。
+ *
+ * スワイプは 2 通りだけ (v1.9.2-q 内の再調整で斜め・任意角度・回転を取り消した):
+ *   左右比較 (lr)  縦の境界を左右へ動かす。左 = 基準 (左画面の地図) / 右 = 比較 (右画面)
+ *   上下比較 (tb)  横の境界を上下へ動かす。上 = 基準 / 下 = 比較
+ *   swipe.pos は境界の位置。画面の幅 (高さ) に対する比率なので、リサイズに追従する。
+ * 右地図の canvas コンテナを、比較側の長方形で clip-path する。
+ * 左右の Map は同じ大きさ・同じ center/zoom なので、境界の両側で同じ地点が
+ * 同じ画素に来る。
+ * ========================================================================== */
+function stageSize() {
+  const r = $("wrap").getBoundingClientRect();
+  return { W: r.width, H: r.height, left: r.left, top: r.top };
+}
+
+const swipeActive = () => !!mapR && viewMode === "single" && swipeOn;
+
+function layoutSwipe() {
+  if (!mapR) return;
+  const cc = mapR.getCanvasContainer();
+  document.body.classList.toggle("sw-tb", swipe.dir === "tb");
+  for (const b of $("swipeBar").querySelectorAll("button[data-dir]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.dir === swipe.dir));
+  }
+  if (!swipeActive()) { cc.style.clipPath = ""; return; }
+  const { W, H } = stageSize();
+  const lr = swipe.dir === "lr";
+  const at = (el, x, y) => { el.style.left = x.toFixed(1) + "px"; el.style.top = y.toFixed(1) + "px"; };
+  const ln = $("swLine");
+  if (lr) {
+    const x = swipe.pos * W;
+    // 比較側 = 境界より右。★ inset() は使わない: canvas コンテナは高さ 0 の
+    // 箱なので、箱基準の inset() だと全部切れてしまう。px の polygon で指定する。
+    const X = x.toFixed(2);
+    cc.style.clipPath = "polygon(" + X + "px 0px, " + W + "px 0px, " + W + "px " + H + "px, " + X + "px " + H + "px)";
+    Object.assign(ln.style, { left: (x - 1).toFixed(1) + "px", top: "0px",
+                              width: "2px", height: H + "px" });
+    at($("swMove"), x, H / 2);
+    $("swMove").textContent = "⇔";
+  } else {
+    const y = swipe.pos * H;
+    const Y = y.toFixed(2);
+    cc.style.clipPath = "polygon(0px " + Y + "px, " + W + "px " + Y + "px, " + W + "px " + H + "px, 0px " + H + "px)";
+    Object.assign(ln.style, { left: "0px", top: (y - 1).toFixed(1) + "px",
+                              width: W + "px", height: "2px" });
+    at($("swMove"), W / 2, y);
+    $("swMove").textContent = "⇕";
+  }
+  layoutTags();
+}
+
+/* 「基準／比較」ラベルの置き場所。
+ *   左右比較  地図の下部に横並び (中央寄せ)
+ *   上下比較  地図の左側に縦並び (上下の中央寄せ)
+ * 境界の位置 (swipe.pos) は見ないので、境界を動かしてもラベルは動かない。
+ * 明るさ・ため池諸元のパネル、縮尺・出典・ズームボタン、向きのバー、診断と
+ * 重ならない場所を、上の好みの位置から近い順に探す。どこにも無ければ
+ * 好みの位置に置く (画面の内側には必ず収める)。 */
+const TAG_GAP = 6;            // ほかの部品との間隔 [px]
+const TAG_EDGE = 8;           // 画面の縁からの余白 [px]
+function tagObstacles(st) {
+  const out = [];
+  const add = (el) => {
+    if (!el) return;
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden") return;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    out.push({ l: r.left - st.left - TAG_GAP, t: r.top - st.top - TAG_GAP,
+               r: r.right - st.left + TAG_GAP, b: r.bottom - st.top + TAG_GAP });
+  };
+  for (const id of ["panel-pond", "brightL", "brightR", "swipeBar", "diag-chip",
+                    "panel-diag", "tilewarn"]) add($(id));
+  // スワイプ中に見えているのは右地図のコントロール (左地図のものは隠してある)
+  for (const el of mapR.getContainer().querySelectorAll(".maplibregl-ctrl")) add(el);
+  return out;
+}
+function layoutTags() {
+  if (!swipeActive()) return;
+  const box = $("swTags"), st = stageSize();
+  const W = st.W, H = st.H, lr = swipe.dir === "lr";
+  box.style.maxWidth = Math.max(60, W - 2 * TAG_EDGE) + "px";   // 狭い画面では折り返す
+  const bw = box.offsetWidth, bh = box.offsetHeight;
+  const obs = tagObstacles(st);
+  const free = (x, y) => !obs.some((o) => x < o.r && x + bw > o.l && y < o.b && y + bh > o.t);
+  const clampX = (x) => Math.max(TAG_EDGE, Math.min(W - TAG_EDGE - bw, x));
+  const clampY = (y) => Math.max(TAG_EDGE, Math.min(H - TAG_EDGE - bh, y));
+  // 好みの位置からの近さで候補を並べる。境界や障害物の端に沿った位置も候補にする
+  const near = (pref, list) => list.slice().sort((a, b) => Math.abs(a - pref) - Math.abs(b - pref));
+  let best = null;
+  if (lr) {
+    const prefX = clampX((W - bw) / 2);
+    const xs = near(prefX, [prefX].concat(obs.map((o) => clampX(o.r)), obs.map((o) => clampX(o.l - bw))));
+    for (let y = clampY(H - TAG_EDGE - bh); y >= TAG_EDGE && !best; y -= 4) {
+      for (const x of xs) if (free(x, y)) { best = [x, y]; break; }
+    }
+    if (!best) best = [prefX, clampY(H - TAG_EDGE - bh)];
+  } else {
+    const prefY = clampY((H - bh) / 2);
+    const ys = near(prefY, [prefY].concat(obs.map((o) => clampY(o.b)), obs.map((o) => clampY(o.t - bh))));
+    for (let x = TAG_EDGE; x <= W - TAG_EDGE - bw && !best; x += 4) {
+      for (const y of ys) if (free(x, y)) { best = [x, y]; break; }
+    }
+    if (!best) best = [TAG_EDGE, prefY];
+  }
+  box.style.left = best[0].toFixed(0) + "px";
+  box.style.top = best[1].toFixed(0) + "px";
+}
+
+function basemapName(key) {
+  if (BASEMAPS[key]) return BASEMAPS[key].label;
+  const c = customById(key);
+  return c ? c.name : String(key);
+}
+function updateSwipeTags() {
+  const lr = swipe.dir === "lr";
+  const put = (el, head, name) => {
+    while (el.firstChild) el.removeChild(el.firstChild);
+    const b = document.createElement("b");
+    b.textContent = head;
+    el.append(b, " " + name);          // ★ textContent 相当。利用者の地図名を HTML にしない
+    el.title = head + " " + name;
+  };
+  put($("swTagBase"), lr ? "基準(左)" : "基準(上)", basemapName(leftBaseKey));
+  put($("swTagCmp"), lr ? "比較(右)" : "比較(下)", basemapName(rightBaseKey));
+  layoutTags();                        // 地図名で幅が変わるので置き直す
+}
+// 明るさの最小化・展開、ため池の選択・解除、診断の開閉でパネルの大きさが変わったら
+// ラベルを置き直す (重ならないように)。
+if (window.ResizeObserver && mapR) {
+  const ro = new ResizeObserver(() => layoutTags());
+  for (const id of ["panel-pond", "brightL", "brightR", "panel-diag", "diag-chip"]) ro.observe($(id));
+}
+
+/** 向きを変える。境界はいつも中央へ戻す (単純な操作にするため)。 */
+function setSwipeDir(dir) {
+  swipe.dir = dir === "tb" ? "tb" : "lr";
+  swipe.pos = 0.5;
+  layoutSwipe();
+  updateSwipeTags();
+}
+
+function setViewMode(mode, wantSwipe) {
+  if (!mapR) return;                         // ?panes=1 の計測モードでは使わない
+  viewMode = mode === "single" ? "single" : "dual";
+  if (typeof wantSwipe === "boolean") swipeOn = wantSwipe;
+  document.body.classList.toggle("vm-single", viewMode === "single");
+  document.body.classList.toggle("vm-swipe", swipeActive());
+  // 左ペインの幅が変わるので両方 resize。center は MapLibre が保つが、
+  // 念のため右を左にそろえ直す (スワイプでは 1 画素でもずれてはいけない)。
+  for (const m of MAPS) m.resize();
+  syncing = true;
+  mapR.jumpTo({ center: mapL.getCenter(), zoom: mapL.getZoom(), bearing: 0, pitch: 0 });
+  syncing = false;
+  for (const p of PANES_ARR) { p.ghost.style.display = "none"; p.dirty = true; }
+  layoutSwipe();
+  updateSwipeTags();
+  refreshAxisLabels();
+  $("panesBtn").textContent = viewMode === "dual" ? "1画面" : "2画面";
+  $("swipeBtn").setAttribute("aria-pressed", String(swipeActive()));
+  $("d-panes").textContent = viewMode === "dual" ? "2 画面"
+    : (swipeActive() ? "1 画面 (スワイプ)" : "1 画面");
+  console.log("[v1.6] view mode: " + viewMode + " swipe=" + swipeActive()
+              + (swipeActive() ? " dir=" + swipe.dir : ""));
+}
+
 $("panesBtn").onclick = () => {
-  const q = new URLSearchParams(location.search);
-  if (PANES === 2) q.set("panes", "1"); else q.delete("panes");
-  const qs = q.toString();
-  location.href = location.pathname + (qs ? "?" + qs : "") + location.hash;
+  if (!mapR) {
+    // ?panes=1 (計測モード) から戻るときだけはページを開き直す (右の Map が無いため)
+    const q = new URLSearchParams(location.search);
+    q.delete("panes");
+    const qs = q.toString();
+    location.href = location.pathname + (qs ? "?" + qs : "") + location.hash;
+    return;
+  }
+  setViewMode(viewMode === "dual" ? "single" : "dual");
 };
+$("swipeBtn").onclick = () => {
+  if (!mapR) return;
+  // 2画面で押したら、そのまま 1画面スワイプへ入る
+  if (viewMode === "dual") setViewMode("single", true);
+  else setViewMode("single", !swipeOn);
+};
+if (!mapR) {
+  $("swipeBtn").disabled = true;
+  $("swipeBtn").title = "1画面計測 (?panes=1) では使えません";
+}
+
+/* --- 境界のドラッグ (8-2 節の bindDrag を共用) --------------------------- */
+bindDrag($("swMove"), "スワイプ境界の移動", {
+  start(e) {
+    const s = stageSize();
+    const lr = swipe.dir === "lr";
+    const p = lr ? e.clientX - s.left : e.clientY - s.top;
+    return { save: swipe.pos, grab: p - swipe.pos * (lr ? s.W : s.H) };
+  },
+  move(ev, k) {
+    const s = stageSize();
+    const lr = swipe.dir === "lr";
+    const p = lr ? ev.clientX - s.left : ev.clientY - s.top;
+    // 画面の端まで寄せられる (= ほぼ全面を片側の画像にできる)
+    swipe.pos = Math.max(0, Math.min(1, (p - k.grab) / (lr ? s.W : s.H)));
+    layoutSwipe();
+  },
+  end(k, cancelled) {
+    if (cancelled) swipe.pos = k.save;
+    layoutSwipe();
+    console.log("[v1.6] swipe moved: dir=" + swipe.dir + " pos=" + swipe.pos.toFixed(3)
+                + (cancelled ? " (cancelled)" : ""));
+  },
+});
+for (const b of $("swipeBar").querySelectorAll("button[data-dir]")) {
+  b.onclick = () => setSwipeDir(b.dataset.dir);
+}
+layoutSwipe();
+updateSwipeTags();
+// 自動確認から使う
+window.__view = { set: setViewMode, dir: setSwipeDir, swipe: swipe, layout: layoutSwipe,
+                  state: () => ({ viewMode, swipeOn, swipe: Object.assign({}, swipe),
+                                  clip: mapR ? mapR.getCanvasContainer().style.clipPath : null }) };
+// ?view=single / ?view=swipe で開く (確認用)。?swipe=tb で上下比較から。
+// 角度などの値は URL 以外に保存していない。旧版の斜めの値 (数値など) が来ても左右比較になる。
+if (mapR && (Q.get("view") === "single" || Q.get("view") === "swipe")) {
+  if (Q.get("swipe") === "tb") swipe.dir = "tb";
+  setViewMode("single", Q.get("view") === "swipe");
+}
 
 /* ==========================================================================
  * 11. ため池 JSON の読み込み — style が出来てから setData する
@@ -2384,7 +3131,7 @@ function pushPondsToMaps() {
   let n = 0;
   for (const m of MAPS) {
     const src = m.getSource("ponds");
-    if (src) { src.setData(pondFC); n++; }
+    if (src) { src.setData(filteredPondFC()); n++; }   // v1.9.2-q: 絞り込み後のため池
   }
   return n;
 }
@@ -2412,6 +3159,8 @@ function whenSourceReady(map) {
     if (!res.ok) throw new Error("HTTP " + res.status);
     const json = await res.json();
     buildPondData(json);
+    fillCitySelect();          // v1.9.2-q: 絞り込みの市町一覧 (件数つき)
+    applyPondFilter();
   } catch (err) {
     // ため池が読めなくても等高線・水位・測線は使えるようにしておく
     console.error("[v1.6] ため池 JSON を読めません:", POND_JSON_URL, err);
