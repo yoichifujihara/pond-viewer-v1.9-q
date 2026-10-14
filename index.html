@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- 版: 公開画面の表記は v1.9-q、内部の開発版は v1.9.2-q (APP_BUILD)。
+<!-- 版: 公開画面の表記は v1.9-q、内部の開発版は v1.9.4-q (APP_BUILD)。
      公開先は pond-viewer-v1.9-q のまま (URL は変えない運用)。 -->
-<meta name="pondatlas-build" content="v1.9.2-q">
+<meta name="pondatlas-build" content="v1.9.4-q">
 <title>ため池災害前後比較ビューア 試行版 | v1.9-q</title>
 <!-- v1.9-q: 外部 CDN (unpkg) をやめ、MapLibre GL JS 5.24.0 を vendor/ へ同梱した。
      公開サイトの表示を自分たちの管理下に置くため。LICENSE も同梱している。
@@ -23,7 +23,11 @@
      (2) ページ内で 1画面 / 2画面を切り替え、1画面では左右比較・上下比較のスワイプ
      v1.9.2-q 内の再調整: 一度入れた「測線 1 本・回転」と斜めスワイプを取り消した。
          測線は v1.9.1-q の仕様 (画面中央の縦・横) へ復元 (復元元 commit fce793f)。
-     公開画面の版表記は v1.9-q のまま (公開先 pond-viewer-v1.9-q)。 -->
+     公開画面の版表記は v1.9-q のまま (公開先 pond-viewer-v1.9-q)。
+
+     v1.9.3-q: ため池諸元の下に外部リンク (地理院地図 / Google マップ航空写真)。
+
+     v1.9.4-q: 上部バーを機能ごとの枠 (探す / 見比べる / 見やすくする) にまとめた。 -->
 <link rel="stylesheet" href="./vendor/maplibre-gl.css">
 <style>
 :root { --bar:#1e2a38; --fg:#f2f2f2; --panel:rgba(24,26,30,0.88);
@@ -52,7 +56,15 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
   border:1px solid #55697e; background:#2b3a4c; color:#fff; }
 #topbar select, #topbar button { cursor:pointer; }
 #topbar .ds { color:#9fb0c0; }
-#topbar .spacer { margin-left:auto; }
+/* v1.9.4-q: 機能ごとの枠。見出しは枠の上辺に重ねる (fieldset の legend と同じ
+ * 見え方)。見出しが横幅を使わないので、1400px 窓の余裕 15px を食わない。
+ * 枠の中の間隔は 6px に詰め、枠と枠の間はバーの gap (12px) で区別する。
+ * ★ #topbar は overflow-x:auto なので縦方向にもはみ出せない。見出しは
+ *   バーの上端 (y=0) より下に収まる位置に置く。 */
+#topbar .tgrp { display:flex; align-items:center; gap:6px; position:relative;
+  height:35px; padding:0 8px; border:1px solid rgba(255,255,255,.18); border-radius:6px; }
+#topbar .tgrp::before { content:attr(data-cap); position:absolute; top:-4px; left:7px;
+  padding:0 3px; font-size:10px; line-height:11px; color:#9fb0c0; background:var(--bar); }
 /* v1.9.1-q: 等高線の ON/OFF と色 (指示 7 節)。
  * 上部バーは 1400px で 1384px まで詰まっていた (v1.9-q §14-1)。ここに
  * チェックボックスと色の select を足すぶん、状態表示でしかない
@@ -159,6 +171,12 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 #panel-pond dl { display:grid; grid-template-columns:auto 1fr; gap:0 8px; margin:0; }
 #panel-pond dt { color:#9fb0c0; }
 #panel-pond dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+/* v1.9.3-q: 外部リンクの行。押せるのはリンクの文字だけ (パネル本体は none のまま)。
+ * 行全体を auto にすると行の余白でも等高線クリックが止まるので、a だけ auto にする。 */
+#panel-pond .plinks { margin-top:5px; padding-top:4px; border-top:1px solid var(--line);
+  display:flex; flex-wrap:wrap; gap:2px 12px; font-size:11px; }
+#panel-pond .plinks a { pointer-events:auto; color:var(--accent); text-decoration:underline; }
+#panel-pond .plinks a::after { content:" ↗"; }
 
 /* ---- 診断パネル (v1.5 から。ため池の行を足した) -------------------------
  * v1.9.1-q: 既定で折りたたむ (指示 13-17 節)。常時展開だと右画面の右上
@@ -455,46 +473,54 @@ body.vm-swipe #swipeBar { display:flex; }
 <body>
 
 <div id="topbar">
-  <span class="brand"><b>ため池災害前後比較ビューア 試行版</b><span class="ver" title="内部版 v1.9.2-q">GitHub Pages 試験運用版 v1.9-q</span></span>
-  <span id="searchWrap">
-    <input id="q" type="search" placeholder="ため池名で検索" autocomplete="off">
-    <span id="qCount"></span>
-    <div id="results"></div>
-  </span>
-  <!-- v1.9.2-q: 市町・総貯水量で絞り込む。条件のパネルは #filterPanel -->
-  <button id="filterBtn" type="button" aria-pressed="false" aria-expanded="false"
-          title="ため池を市町・総貯水量で絞り込む (地図の表示と検索候補に効く)">絞り込み</button>
-  <button id="homeBtn">全域へ戻る</button>
+  <span class="brand"><b>ため池災害前後比較ビューア 試行版</b><span class="ver" title="内部版 v1.9.4-q">GitHub Pages 試験運用版 v1.9-q</span></span>
+  <!-- v1.9.4-q: 機能ごとに枠でまとめた。見出しは案内カード (#intro) の
+       「探す / 見比べる / 見やすくする」と同じ。中の要素の ID と動作は変えていない。 -->
+  <div class="tgrp" id="tgSearch" role="group" aria-label="探す" data-cap="探す">
+    <span id="searchWrap">
+      <input id="q" type="search" placeholder="ため池名で検索" autocomplete="off">
+      <span id="qCount"></span>
+      <div id="results"></div>
+    </span>
+    <!-- v1.9.2-q: 市町・総貯水量で絞り込む。条件のパネルは #filterPanel -->
+    <button id="filterBtn" type="button" aria-pressed="false" aria-expanded="false"
+            title="ため池を市町・総貯水量で絞り込む (地図の表示と検索候補に効く)">絞り込み</button>
+    <button id="homeBtn">全域へ戻る</button>
+  </div>
   <!-- ★ autocomplete="off" は必須。付けないと Chrome が再読み込み時に
        「前回選んでいた値」へ勝手に戻すので、**select の表示と地図の中身が
        食い違う**。外部タイルを追加したあと再読み込みすると、地図は既定の背景
        なのに select だけ追加地図を指した状態になって踏んだ。 -->
-  <span class="grp"><label for="ctOn">等高線</label>
-    <input id="ctOn" type="checkbox" checked autocomplete="off" title="等高線の表示 ON/OFF">
-    <select id="ctColor" autocomplete="off" title="等高線の色">
-      <option value="std" selected>標準</option>
-      <option value="white">白</option>
-      <option value="black">黒</option>
-    </select></span>
-  <!-- v1.9.1-q 追加: 「左背景:」「右背景:」から「左:」「右:」へ縮めた。
-       ＋外部タイル を足したぶん上部バーが 1400px で 4px 溢れたため
-       (v1.9-q §14-1 と同じ罠。overflow-x:auto なので崩れず気づけない)。
-       すぐ隣の select に地図名が出るので、これで意味は通る。 -->
-  <label title="左画面の背景地図">左: <select id="baseL" autocomplete="off"></select></label>
-  <label title="右画面の背景地図">右: <select id="baseR" autocomplete="off"></select></label>
-  <button id="tileAddBtn" title="右画面へ外部のXYZタイルを追加する">＋ 外部タイル</button>
-  <label>測線: <select id="axisDir" autocomplete="off">
-    <option value="both" selected>両方</option>
-    <option value="v">縦</option>
-    <option value="h">横</option>
-    <option value="none">なし</option>
-  </select></label>
-  <span class="spacer"></span>
-  <!-- v1.9.2-q: 画面数はページ内で切り替える (設定が初期化されない)。
-       スワイプは 1画面で基準 (左) と比較 (右) を境界の両側に重ねて見比べる。 -->
-  <button id="panesBtn" type="button" title="1画面 / 2画面を切り替える">1画面</button>
-  <button id="swipeBtn" type="button" aria-pressed="false"
-          title="1画面で左右の画像を境界の両側に重ねて比べる">スワイプ</button>
+  <div class="tgrp" id="tgCompare" role="group" aria-label="見比べる" data-cap="見比べる">
+    <!-- v1.9.1-q 追加: 「左背景:」「右背景:」から「左:」「右:」へ縮めた。
+         ＋外部タイル を足したぶん上部バーが 1400px で 4px 溢れたため
+         (v1.9-q §14-1 と同じ罠。overflow-x:auto なので崩れず気づけない)。
+         すぐ隣の select に地図名が出るので、これで意味は通る。 -->
+    <label title="左画面の背景地図">左: <select id="baseL" autocomplete="off"></select></label>
+    <label title="右画面の背景地図">右: <select id="baseR" autocomplete="off"></select></label>
+    <!-- 外部タイルは右画面へ比べる地図を足す操作なので「見比べる」に置く (v1.9.4-q) -->
+    <button id="tileAddBtn" title="右画面へ外部のXYZタイルを追加する">＋ 外部タイル</button>
+    <!-- v1.9.2-q: 画面数はページ内で切り替える (設定が初期化されない)。
+         スワイプは 1画面で基準 (左) と比較 (右) を境界の両側に重ねて見比べる。 -->
+    <button id="panesBtn" type="button" title="1画面 / 2画面を切り替える">1画面</button>
+    <button id="swipeBtn" type="button" aria-pressed="false"
+            title="1画面で左右の画像を境界の両側に重ねて比べる">スワイプ</button>
+  </div>
+  <div class="tgrp" id="tgView" role="group" aria-label="見やすくする" data-cap="見やすくする">
+    <span class="grp"><label for="ctOn">等高線</label>
+      <input id="ctOn" type="checkbox" checked autocomplete="off" title="等高線の表示 ON/OFF">
+      <select id="ctColor" autocomplete="off" title="等高線の色">
+        <option value="std" selected>標準</option>
+        <option value="white">白</option>
+        <option value="black">黒</option>
+      </select></span>
+    <label>測線: <select id="axisDir" autocomplete="off">
+      <option value="both" selected>両方</option>
+      <option value="v">縦</option>
+      <option value="h">横</option>
+      <option value="none">なし</option>
+    </select></label>
+  </div>
 </div>
 
 <div id="wrap">
@@ -511,6 +537,7 @@ body.vm-swipe #swipeBar { display:flex; }
         <dt>総貯水量</dt><dd id="p-vol">-</dd>
         <dt>満水面積</dt><dd id="p-area">-</dd>
       </dl>
+      <div class="plinks" id="p-links"></div>
     </div>
     <div class="bright open" id="brightL">
       <button type="button" class="bright-chip" id="brightChipL" aria-expanded="true"
@@ -606,12 +633,11 @@ body.vm-swipe #swipeBar { display:flex; }
           <span class="ui">絞り込み</span>。地図の青い丸を押しても選べます</span></li>
       <li><span class="no">2</span><span class="what">見比べる</span>
         <span class="how">左右 2 画面で同じ場所を表示します。背景は <span class="ui">左:</span>
-          <span class="ui">右:</span> で選択。<span class="ui">スワイプ</span> で 1 画面に重ねて比較</span></li>
+          <span class="ui">右:</span> で選択し、<span class="ui">＋ 外部タイル</span> で地図を追加。<span class="ui">スワイプ</span> で 1 画面に重ねて比較</span></li>
       <li><span class="no">3</span><span class="what">水位を読む</span>
         <span class="how">ため池を選んで拡大すると等高線が出ます。等高線をクリックすると、その標高が「水位」になり左右で強調されます</span></li>
       <li><span class="no">4</span><span class="what">見やすくする</span>
-        <span class="how"><span class="ui">等高線</span> の色・表示、各画面左下の明るさ、
-          <span class="ui">＋ 外部タイル</span> で災害後の写真を追加</span></li>
+        <span class="how"><span class="ui">等高線</span> の色・表示と <span class="ui">測線</span>、各画面左下の明るさ</span></li>
     </ol>
     <div class="first"><b>まずは:</b> 検索欄に「青木作」と入れて候補を選び、拡大された地図で等高線をクリックしてみてください。</div>
     <div class="foot">
@@ -722,7 +748,7 @@ body.vm-swipe #swipeBar { display:flex; }
 "use strict";
 const T0 = performance.now();
 // 内部の開発版と、画面に出す公開版。公開表記は据え置く運用 (v1.9.2-q 指示 2 節)。
-const APP_BUILD = "v1.9.2-q";
+const APP_BUILD = "v1.9.4-q";
 const APP_PUBLIC_VERSION = "v1.9-q";
 console.log("[v1.6] build " + APP_BUILD + " (公開表記 " + APP_PUBLIC_VERSION + ")");
 
@@ -998,6 +1024,16 @@ const CLUSTER_MAX_ZOOM = 13;     // これを超えると個別ポイントに�
 const CLUSTER_RADIUS = 50;       // クラスタ半径 [px]
 const OVERVIEW_PADDING = 40;     // 全域表示の余白 [px]
 const SEARCH_MAX_RESULTS = 50;   // 検索候補の表示上限 (件数自体は全部数える)
+
+// v1.9.3-q: 諸元パネルの外部リンク。{z} {lat} {lon} を選んだ池の値で置き換える。
+// 池データに公式 ID は無いので、どれも緯度経度だけで開ける URL にしている。
+// Google は公式の Maps URLs 形式 (api=1)。
+const POND_LINK_ZOOM = 18;
+const POND_LINKS = [
+  { label: "地理院地図", url: "https://maps.gsi.go.jp/#{z}/{lat}/{lon}/" },
+  { label: "Google マップ (航空写真)",
+    url: "https://www.google.com/maps/@?api=1&map_action=map&center={lat},{lon}&zoom={z}&basemap=satellite" },
+];
 
 /* --- v1.5 から持ち越した定数 (アルゴリズムごと変更しない) ---------------- */
 const CLICK_TOLERANCE_PX = 6;    // クリック点から等高線までの許容距離 [px]
@@ -1629,7 +1665,27 @@ function renderPondPanel() {
   $("p-crest").textContent = fmtVal(p.crest, " m", 0);
   $("p-vol").textContent   = fmtVal(p.vol, " 千m³", 1);
   $("p-area").textContent  = fmtVal(p.area, " km²", 4);
+  renderPondLinks(p);
   $("s-pond").textContent = p.name + (p.city ? " (" + p.city + ")" : "");
+}
+
+/** v1.9.3-q: 外部リンクを作り直す。innerHTML は使わない (AGENTS §8)。 */
+function renderPondLinks(p) {
+  const box = $("p-links");
+  box.replaceChildren();
+  const ok = Number.isFinite(p.lat) && Number.isFinite(p.lon);
+  box.style.display = ok ? "" : "none";
+  if (!ok) return;
+  const v = { z: String(POND_LINK_ZOOM), lat: p.lat.toFixed(6), lon: p.lon.toFixed(6) };
+  for (const L of POND_LINKS) {
+    const a = document.createElement("a");
+    a.href = L.url.replace(/\{(z|lat|lon)\}/g, (_, k) => v[k]);
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = L.label;
+    a.title = L.label + " でこの池の位置を開く (別タブ)";
+    box.appendChild(a);
+  }
 }
 
 function applyPondHighlight() {
