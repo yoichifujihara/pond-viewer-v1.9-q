@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- 版: 公開画面の表記は v1.9-q、内部の開発版は v1.9.4-q (APP_BUILD)。
+<!-- 版: 公開画面の表記は v1.9-q、内部の開発版は v1.9.5-q (APP_BUILD)。
      公開先は pond-viewer-v1.9-q のまま (URL は変えない運用)。 -->
-<meta name="pondatlas-build" content="v1.9.4-q">
-<title>ため池災害前後比較ビューア 試行版 | v1.9-q</title>
+<meta name="pondatlas-build" content="v1.9.5-q">
+<title>ため池防災Webビューア | v1.9-q</title>
 <!-- v1.9-q: 外部 CDN (unpkg) をやめ、MapLibre GL JS 5.24.0 を vendor/ へ同梱した。
      公開サイトの表示を自分たちの管理下に置くため。LICENSE も同梱している。
 
@@ -27,7 +27,16 @@
 
      v1.9.3-q: ため池諸元の下に外部リンク (地理院地図 / Google マップ航空写真)。
 
-     v1.9.4-q: 上部バーを機能ごとの枠 (探す / 見比べる / 見やすくする) にまとめた。 -->
+     v1.9.4-q: 上部バーを機能ごとの枠 (探す / 見比べる / 見やすくする) にまとめた。
+
+     v1.9.5-q: 名称を報文に合わせて「ため池防災Webビューア」へ (利用者の指示)。
+               諸元パネルに「前へ / 次へ」。絞り込んだ池を総貯水量の大きい順に巡回する
+               (PageUp / PageDown でも送れる)。
+               見た目の整理 (機能・ID は変えない): 地図上の出典は畳んで始め、全文は下の帯に常時表示 /
+               下の帯を上部バーと同じ紺にして折り返す (横スクロールをやめる) /
+               水位を左上のカードに大きく出す / 画面ラベルに地図名。
+               共有 (見本): 上部バーの「共有」から、いまの画面を再現するリンクと要約文をコピーできる。
+               状態は URL の query に載せるだけで、外へは何も送らない (節 10-2c)。 -->
 <link rel="stylesheet" href="./vendor/maplibre-gl.css">
 <style>
 :root { --bar:#1e2a38; --fg:#f2f2f2; --panel:rgba(24,26,30,0.88);
@@ -37,6 +46,10 @@
         --lbl-fg:#ffffff; --lbl-halo:#000000; }
 * { box-sizing: border-box; }
 html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-ui,sans-serif; }
+/* v1.9.5-q: 縦に積む (上部バー 44px / 地図 / 下の帯)。下の帯は出典の全文を折り返して出すので
+ * 高さが決まらない。地図は残りを取る。 */
+body { display:flex; flex-direction:column; }
+#topbar, #statusbar { flex:0 0 auto; }
 
 /* ---- 上下のバー + 左右ペイン (v1.5 の骨格をそのまま) -------------------- */
 #topbar { height:44px; display:flex; align-items:center; gap:12px; padding:0 12px;
@@ -104,6 +117,29 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
  * 上部バーには「絞り込み」ボタンだけを置き、条件はこのパネルで入れる
  * (上部バーは 1400px で余裕が 14px しかない)。#results と同じく position:fixed。 */
 #filterBtn { padding:2px 7px; }
+/* ---- v1.9.5-q: 共有 (リンクと要約文)。#filterPanel と同じ作りのパネル ---------- */
+#shareBtn { min-width:44px; }
+#sharePanel { position:fixed; z-index:41; top:46px; left:0; width:340px; display:none;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.45);
+  padding:9px 11px; font-size:12px; line-height:1.5; backdrop-filter:blur(4px); }
+#sharePanel.open { display:block; }
+#sharePanel .ttl { font-weight:700; color:var(--accent); margin-bottom:4px; }
+#sharePanel .cap { color:#9fb0c0; margin-top:6px; }
+#sharePanel .row { display:flex; align-items:center; gap:6px; margin:3px 0; }
+#sharePanel input, #sharePanel textarea, #sharePanel button {
+  font:inherit; font-size:12px; padding:3px 6px; border-radius:4px;
+  border:1px solid #55697e; background:#2b3a4c; color:#fff; }
+#sharePanel input { flex:1 1 auto; min-width:0; }
+#sharePanel textarea { display:block; width:100%; resize:vertical; line-height:1.45; }
+#sharePanel button { cursor:pointer; white-space:nowrap; }
+#sharePanel button.primary { background:var(--accent); color:#0b1620; border-color:var(--accent);
+  font-weight:700; }
+#sharePanel .done { color:#86efac; min-height:1.5em; flex:1 1 auto; }
+#sharePanel .warn { display:none; margin:6px 0 0; padding:5px 8px; border-radius:4px;
+  background:rgba(251,191,36,.14); color:#fcd34d; }
+#sharePanel .warn.on { display:block; }
+#sharePanel .note { color:#9fb0c0; font-size:11px; margin:6px 0 0; }
 #filterPanel { position:fixed; z-index:41; top:46px; left:0; width:292px; display:none;
   background:var(--panel); color:var(--fg); border:1px solid var(--line);
   border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.45);
@@ -129,12 +165,17 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 #filterPanel .acts .close { margin-left:auto; }
 #filterPanel .note { color:#9fb0c0; font-size:11px; margin:6px 0 0; }
 
-#wrap { display:flex; height:calc(100% - 44px - 30px); }
+#wrap { display:flex; flex:1 1 auto; min-height:0; }
 .pane { flex:1 1 0; position:relative; min-width:0; }
 .pane + .pane { border-left:2px solid var(--bar); }
 .map { position:absolute; inset:0; background:#dde3e8; }
 .pane-label { position:absolute; top:8px; left:8px; z-index:3; pointer-events:none;
-  background:rgba(30,42,56,.85); color:#fff; padding:3px 10px; border-radius:4px; font-size:13px; }
+  background:rgba(30,42,56,.85); color:#fff; padding:3px 10px; border-radius:4px; font-size:13px;
+  /* v1.9.5-q: 「左｜地図名」。長い名前 (外部タイル) は省略記号。右上の診断チップに届かない幅 */
+  max-width:calc(100% - 120px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pane-label .side { font-weight:700; }
+.pane-label .bm { margin-left:7px; padding-left:8px; border-left:1px solid rgba(255,255,255,.35);
+  color:#dbe7f3; }
 
 /* ---- v1.5 から: 測線・標高ラベル・同期カーソルの重ね描き ---------------- */
 .overlay { position:absolute; inset:0; z-index:4; pointer-events:none; overflow:hidden; }
@@ -160,7 +201,25 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
  * ★ pointer-events:none は必須。地図に重ねる表示専用パネルなので、
  *   これが無いとパネルの下にある等高線をクリックできなくなる
  *   (水位読取が「効かない」ように見える。v1.6 の実装中に踏んだ)。 */
-#panel-pond { position:absolute; z-index:6; top:40px; left:8px; width:238px;
+/* v1.9.5-q: 左上は縦の列。上にため池の諸元、下に水位カード。列もカードも none のまま。 */
+#infoCol { position:absolute; z-index:6; top:40px; left:8px; width:238px;
+  display:flex; flex-direction:column; gap:6px; pointer-events:none; }
+#panel-wl { pointer-events:none; display:none; align-items:baseline; gap:8px;
+  background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
+  padding:6px 11px; font-size:12px; line-height:1.4; backdrop-filter:blur(4px);
+  box-shadow:0 4px 16px rgba(0,0,0,.35); }
+#panel-wl.on { display:flex; }
+#panel-wl .k { color:#9fb0c0; }
+#panel-wl #wl { font-size:21px; font-weight:700; color:var(--sel);
+  font-variant-numeric:tabular-nums; letter-spacing:.02em; }
+#panel-wl #clearWL { pointer-events:auto; margin-left:auto; align-self:center; font:inherit;
+  font-size:11px; padding:2px 8px; border-radius:4px; border:1px solid var(--line);
+  background:rgba(255,255,255,.08); color:var(--fg); cursor:pointer; }
+#panel-wl #clearWL:hover { border-color:var(--accent); color:var(--accent); }
+#panel-wl .none { display:none; color:#9fb0c0; font-size:11px; }
+#panel-wl.empty #wl, #panel-wl.empty #clearWL { display:none; }
+#panel-wl.empty .none { display:inline; }
+#panel-pond { width:238px;
   pointer-events:none;
   background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
   padding:9px 11px; font-size:12px; line-height:1.55; backdrop-filter:blur(4px);
@@ -177,6 +236,16 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
   display:flex; flex-wrap:wrap; gap:2px 12px; font-size:11px; }
 #panel-pond .plinks a { pointer-events:auto; color:var(--accent); text-decoration:underline; }
 #panel-pond .plinks a::after { content:" ↗"; }
+/* v1.9.5-q: 前へ / 次へ。押せるのはボタンだけ (行の余白は等高線クリックを通す)。 */
+#panel-pond .pnav { margin-top:5px; padding-top:5px; border-top:1px solid var(--line);
+  display:flex; align-items:center; gap:6px; font-size:11px; }
+#panel-pond .pnav button { pointer-events:auto; font:inherit; font-size:11px; padding:2px 8px;
+  border-radius:4px; border:1px solid var(--line); background:rgba(255,255,255,.08);
+  color:var(--fg); cursor:pointer; white-space:nowrap; }
+#panel-pond .pnav button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+#panel-pond .pnav button:disabled { opacity:.35; cursor:default; }
+#panel-pond .pnav .pos { flex:1 1 auto; text-align:center; color:#9fb0c0;
+  font-variant-numeric:tabular-nums; white-space:nowrap; }
 
 /* ---- 診断パネル (v1.5 から。ため池の行を足した) -------------------------
  * v1.9.1-q: 既定で折りたたむ (指示 13-17 節)。常時展開だと右画面の右上
@@ -243,7 +312,9 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
  *   最小化すると元のチップに戻る。開閉は左右独立 (追加指示 6 節)。
  *   .bright は bottom を固定してあるので、展開しても下端が動かず
  *   出典の帯とぶつからない。 */
-.bright { position:absolute; z-index:7; left:8px; bottom:84px; }
+/* v1.9.5-q: 出典は畳んで始めるようにしたので 84px -> 60px へ下げた。60px は、利用者が ⓘ で
+ *   出典を開いて 2 行の帯 (下端 10px + 高さ 44px) になっても重ならない高さ。 */
+.bright { position:absolute; z-index:7; left:8px; bottom:60px; }
 .bright-chip { font:inherit; font-size:12px; line-height:1.4; padding:3px 9px; cursor:pointer;
   background:var(--panel); color:var(--fg); border:1px solid var(--line);
   border-radius:6px; backdrop-filter:blur(4px); box-shadow:0 2px 8px rgba(0,0,0,0.3);
@@ -379,16 +450,16 @@ html, body { margin:0; height:100%; font-family:"Yu Gothic UI","Meiryo",system-u
 #d-err { margin-top:5px; font-size:11px; color:#fca5a5; white-space:pre-wrap; }
 .ok { color:#86efac; } .ng { color:#fca5a5; } .warn { color:#fcd34d; }
 
-#statusbar { height:30px; display:flex; align-items:center; gap:16px; padding:0 12px;
-             background:#f0f2f5; color:#333; font-size:13px; border-top:1px solid #ccc;
-             white-space:nowrap; overflow-x:auto; }
+/* v1.9.5-q: 上部バーと同じ紺。横スクロールをやめて折り返す (出典は切らない・隠さない)。
+ * 「選択池」「水位」「水位解除」は左上のカードへ移した。 */
+#statusbar { min-height:30px; display:flex; flex-wrap:wrap; align-items:center; gap:2px 16px;
+             padding:3px 12px; background:var(--bar); color:#dbe7f3; font-size:12px;
+             white-space:nowrap; }
 #statusbar .hint { background:#0077b6; color:#fff; padding:3px 10px; border-radius:12px;
-                   font-weight:bold; }
-#statusbar b { color:#b30000; }
-#statusbar #wl { font-size:15px; }
-#statusbar button { font:inherit; font-size:12px; padding:1px 8px; border-radius:4px;
-  border:1px solid #99a; background:#fff; cursor:pointer; }
-#statusbar .src { margin-left:auto; color:#666; font-size:12px; }
+                   font-weight:bold; font-size:13px; }
+#statusbar #cursorPos { color:#9fb0c0; font-variant-numeric:tabular-nums; }
+#statusbar .src { margin-left:auto; color:#b9c7d6; font-size:11.5px; white-space:normal;
+  min-width:0; text-align:right; }
 
 .maplibregl-popup-content { font-family:inherit; font-size:12px; padding:7px 11px; }
 .maplibregl-popup-content b { font-size:15px; }
@@ -473,7 +544,7 @@ body.vm-swipe #swipeBar { display:flex; }
 <body>
 
 <div id="topbar">
-  <span class="brand"><b>ため池災害前後比較ビューア 試行版</b><span class="ver" title="内部版 v1.9.4-q">GitHub Pages 試験運用版 v1.9-q</span></span>
+  <span class="brand"><b>ため池防災Webビューア</b><span class="ver" title="内部版 v1.9.5-q">GitHub Pages 試験運用版 v1.9-q</span></span>
   <!-- v1.9.4-q: 機能ごとに枠でまとめた。見出しは案内カード (#intro) の
        「探す / 見比べる / 見やすくする」と同じ。中の要素の ID と動作は変えていない。 -->
   <div class="tgrp" id="tgSearch" role="group" aria-label="探す" data-cap="探す">
@@ -521,13 +592,19 @@ body.vm-swipe #swipeBar { display:flex; }
       <option value="none">なし</option>
     </select></label>
   </div>
+  <!-- v1.9.5-q: 共有 (見本)。条件や文面はパネル #sharePanel に出す -->
+  <div class="tgrp" id="tgShare" role="group" aria-label="共有する" data-cap="共有する">
+    <button id="shareBtn" type="button" aria-expanded="false"
+            title="いまの画面を再現するリンクと要約文を作る">共有</button>
+  </div>
 </div>
 
 <div id="wrap">
   <div class="pane" id="paneL">
-    <div class="pane-label">左</div>
+    <div class="pane-label" id="paneLabelL"><span class="side">左</span></div>
     <div id="mapL" class="map"></div>
     <div class="overlay" id="ovL"></div>
+    <div id="infoCol">
     <div id="panel-pond">
       <div class="pname" id="p-name">-</div>
       <div class="paddr" id="p-addr">-</div>
@@ -538,6 +615,16 @@ body.vm-swipe #swipeBar { display:flex; }
         <dt>満水面積</dt><dd id="p-area">-</dd>
       </dl>
       <div class="plinks" id="p-links"></div>
+      <div class="pnav" id="p-nav">
+        <button type="button" id="pPrev" title="前の池へ (PageUp)">◀ 前へ</button>
+        <span class="pos" id="pPos" title="絞り込みに合う池を、総貯水量の大きい順に送ります">-</span>
+        <button type="button" id="pNext" title="次の池へ (PageDown)">次へ ▶</button>
+      </div>
+    </div>
+    <div id="panel-wl" class="empty">
+      <span class="k">水位</span><b id="wl">未選択</b><span class="none">等高線をクリックすると読めます</span>
+      <button type="button" id="clearWL" title="水位の選択を解除">解除</button>
+    </div>
     </div>
     <div class="bright open" id="brightL">
       <button type="button" class="bright-chip" id="brightChipL" aria-expanded="true"
@@ -554,7 +641,7 @@ body.vm-swipe #swipeBar { display:flex; }
     </div>
   </div>
   <div class="pane" id="paneR">
-    <div class="pane-label">右</div>
+    <div class="pane-label" id="paneLabelR"><span class="side">右</span></div>
     <div id="mapR" class="map"></div>
     <div class="overlay" id="ovR"></div>
     <button type="button" id="diag-chip" aria-expanded="false"
@@ -614,12 +701,10 @@ body.vm-swipe #swipeBar { display:flex; }
 <div id="statusbar">
   <span class="hint" role="button" tabindex="0"
         title="このサイトでできること (案内を開く)">ため池を選ぶ → 等高線をクリックで水位 ？</span>
-  <span>選択池: <b id="s-pond">未選択</b></span>
-  <span>水位: <b id="wl">未選択</b></span>
-  <button id="clearWL">水位解除</button>  <span>等高線: <span id="h-dataset">-</span></span>
+  <span id="s-pond" hidden>未選択</span>
+  <span>等高線: <span id="h-dataset">-</span></span>
   <span id="cursorPos"></span>
-  <span class="src">出典: 国土地理院タイル / 林野庁 能登地域2024 DEM (PDL1.0) / ため池: <span id="s-src">-</span>
-    / 等高線生成: maplibre-contour (numpng 対応版, BSD-3-Clause)</span>
+  <span class="src">出典: <span id="s-credits">国土地理院タイル / 林野庁 能登地域2024 DEM (PDL1.0) / 農業用ため池一覧 / 等高線生成: maplibre-contour (numpng 対応版, BSD-3-Clause)</span>（ため池データ: <span id="s-src">-</span>）</span>
 </div>
 
 <div id="introBack" role="dialog" aria-modal="true" aria-labelledby="introTitle">
@@ -630,7 +715,7 @@ body.vm-swipe #swipeBar { display:flex; }
     <ol>
       <li><span class="no">1</span><span class="what">探す</span>
         <span class="how">名前で検索 <span class="ui">ため池名で検索</span>。市町や総貯水量で
-          <span class="ui">絞り込み</span>。地図の青い丸を押しても選べます</span></li>
+          <span class="ui">絞り込み</span>。地図の青い丸を押しても選べます。選んだあとは <span class="ui">次へ ▶</span> で順に見られます</span></li>
       <li><span class="no">2</span><span class="what">見比べる</span>
         <span class="how">左右 2 画面で同じ場所を表示します。背景は <span class="ui">左:</span>
           <span class="ui">右:</span> で選択し、<span class="ui">＋ 外部タイル</span> で地図を追加。<span class="ui">スワイプ</span> で 1 画面に重ねて比較</span></li>
@@ -638,6 +723,8 @@ body.vm-swipe #swipeBar { display:flex; }
         <span class="how">ため池を選んで拡大すると等高線が出ます。等高線をクリックすると、その標高が「水位」になり左右で強調されます</span></li>
       <li><span class="no">4</span><span class="what">見やすくする</span>
         <span class="how"><span class="ui">等高線</span> の色・表示と <span class="ui">測線</span>、各画面左下の明るさ</span></li>
+      <li><span class="no">5</span><span class="what">共有する</span>
+        <span class="how"><span class="ui">共有</span> で、いまの画面を開けるリンクと要約文をコピーできます</span></li>
     </ol>
     <div class="first"><b>まずは:</b> 検索欄に「青木作」と入れて候補を選び、拡大された地図で等高線をクリックしてみてください。</div>
     <div class="foot">
@@ -646,6 +733,24 @@ body.vm-swipe #swipeBar { display:flex; }
       <span class="again">この案内は、画面下の青いヒント「…水位 ？」を押すといつでも開けます。</span>
     </div>
   </div>
+</div>
+
+<div id="sharePanel" role="dialog" aria-label="この画面を共有">
+  <div class="ttl">この画面を共有</div>
+  <div class="cap">共有リンク</div>
+  <div class="row">
+    <input type="text" id="shareUrl" readonly autocomplete="off" spellcheck="false" aria-label="共有リンク">
+    <button type="button" class="primary" id="shareCopyUrl">リンクをコピー</button>
+  </div>
+  <div class="cap">要約文 (メールなどにそのまま貼れます)</div>
+  <textarea id="shareText" readonly rows="6" spellcheck="false" autocomplete="off" aria-label="要約文"></textarea>
+  <div class="row">
+    <button type="button" id="shareCopyText">要約文をコピー</button>
+    <span class="done" id="shareDone" role="status"></span>
+    <button type="button" id="shareClose">閉じる</button>
+  </div>
+  <p class="warn" id="shareWarn">表示中の外部タイルは共有されません (リンク先では標準の地図で開きます)。</p>
+  <p class="note">リンクを開くと、この画面 (ため池・左右の地図・水位・表示のしかた) が再現されます。リンクを作るだけで、外へは何も送りません。</p>
 </div>
 
 <div id="filterPanel" role="dialog" aria-label="ため池の絞り込み">
@@ -748,7 +853,7 @@ body.vm-swipe #swipeBar { display:flex; }
 "use strict";
 const T0 = performance.now();
 // 内部の開発版と、画面に出す公開版。公開表記は据え置く運用 (v1.9.2-q 指示 2 節)。
-const APP_BUILD = "v1.9.4-q";
+const APP_BUILD = "v1.9.5-q";
 const APP_PUBLIC_VERSION = "v1.9-q";
 console.log("[v1.6] build " + APP_BUILD + " (公開表記 " + APP_PUBLIC_VERSION + ")");
 
@@ -1541,6 +1646,22 @@ function makeMap(container, basemapKey, useHash) {
   });
   map.touchZoomRotate.disableRotation();
   map.keyboard.disableRotation();
+  // v1.9.5-q: 出典は畳んだ状態 (ⓘ) で始める。全文は下の帯に常時出している (syncCredits)。
+  // MapLibre は compact の出典を、中身が入った最初の 1 回だけ自分で開き (maplibregl-compact-show)、
+  // 地図をドラッグすると畳む。その「最初の 1 回」を、開いた瞬間に畳み直して省く。
+  // Map 生成直後は出典が空でまだ開いていないので、class の変化を待つ (★ 生成直後に外しても効かない)。
+  {
+    const at = map.getContainer().querySelector(".maplibregl-ctrl-attrib");
+    if (at && window.MutationObserver) {
+      const mo = new MutationObserver(() => {
+        if (!at.classList.contains("maplibregl-compact-show")) return;
+        mo.disconnect();                       // 以後、利用者が ⓘ で開いたものは畳まない
+        at.classList.remove("maplibregl-compact-show");
+        at.removeAttribute("open");
+      });
+      mo.observe(at, { attributes: true, attributeFilter: ["class"] });
+    }
+  }
   map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-left");
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
   map.on("error", (e) => {
@@ -1589,6 +1710,30 @@ function renderBmMiss() {
 const mapL = makeMap("mapL", BASE_L_DEFAULT, true);
 const mapR = PANES === 2 ? makeMap("mapR", BASE_R_DEFAULT, false) : null;
 const MAPS = mapR ? [mapL, mapR] : [mapL];
+
+/* v1.9.5-q: 下の帯の出典。地図上の出典 (畳んである) と同じ中身を、常に全文で出す。
+ * 左右の地図の出典を " | " で分け、重複を除いてつなぐ。背景の切替・外部タイルの追加で
+ * MapLibre が出典を書き換えるので、MutationObserver で追従する。
+ * 利用者が入れた外部タイルの出典を含むので textContent で入れる。 */
+function syncCredits() {
+  const parts = [];
+  for (const m of MAPS) {
+    const el = m.getContainer().querySelector(".maplibregl-ctrl-attrib-inner");
+    if (!el) continue;
+    for (const t of el.textContent.split(" | ")) {
+      const v = t.trim();
+      if (v && parts.indexOf(v) < 0) parts.push(v);
+    }
+  }
+  if (parts.length) $("s-credits").textContent = parts.join(" | ");   // 空のあいだは初期の文のまま
+}
+for (const m of MAPS) {
+  const el = m.getContainer().querySelector(".maplibregl-ctrl-attrib-inner");
+  if (el && window.MutationObserver) {
+    new MutationObserver(syncCredits).observe(el, { childList: true, characterData: true, subtree: true });
+  }
+}
+syncCredits();
 
 if (PANES === 1) {
   $("paneR").querySelector(".pane-label").textContent = "右 (1画面計測のため無効)";
@@ -1654,6 +1799,7 @@ function renderPondPanel() {
   if (!selectedPond) {
     el.style.display = "none";
     $("s-pond").textContent = "未選択";
+    renderWaterCard();
     return;
   }
   const p = selectedPond;
@@ -1666,7 +1812,9 @@ function renderPondPanel() {
   $("p-vol").textContent   = fmtVal(p.vol, " 千m³", 1);
   $("p-area").textContent  = fmtVal(p.area, " km²", 4);
   renderPondLinks(p);
+  renderPondNav();
   $("s-pond").textContent = p.name + (p.city ? " (" + p.city + ")" : "");
+  renderWaterCard();
 }
 
 /** v1.9.3-q: 外部リンクを作り直す。innerHTML は使わない (AGENTS §8)。 */
@@ -1754,8 +1902,7 @@ function searchPonds(term) {
   if (!q) {
     // v1.9.2-q: 検索語が空でも絞り込み中なら、条件に合う池を総貯水量の大きい順に出す
     if (!filterActive()) return { hits: [], total: 0 };
-    const all = PONDS.filter(pondPasses);
-    all.sort((a, b) => (b.vol ?? -1) - (a.vol ?? -1) || a.name.localeCompare(b.name, "ja"));
+    const all = tourList();                  // v1.9.5-q: 「次へ」で送る順番と同じ並び
     return { hits: all.slice(0, SEARCH_MAX_RESULTS), total: all.length };
   }
   const hits = [];
@@ -1892,6 +2039,8 @@ function applyPondFilter() {
   pondFilter.volMin = readNum($("fVolMin"));
   pondFilter.volMax = readNum($("fVolMax"));
   const n = PONDS.filter(pondPasses).length;
+  tourCache = null;                          // v1.9.5-q: 送る順番を作り直す
+  renderPondNav();
   if (pondsReady) pushPondsToMaps();
   const on = filterActive();
   const cnt = $("fCount");
@@ -1963,6 +2112,57 @@ document.addEventListener("keydown", (e) => {
 window.__filter = { state: pondFilter, apply: applyPondFilter, passes: pondPasses,
                     fc: filteredPondFC, open: setFilterOpen };
 
+/* --------------------------------------------------------------------------
+ * 5-3. 前へ / 次へ (v1.9.5-q)
+ *
+ * 絞り込みに合う池 (条件なしなら全池) を、総貯水量の大きい順 -> 名前順に送る。
+ * 絞り込み中に検索欄へ出る一覧と同じ並び (あちらは上位 50 件で切る)。
+ * 検索語は見ない。端では折り返さず、ボタンを disabled にする (一巡が分かるように)。
+ * 選択中の池が条件から外れているときは位置を「–」とし、「次へ」で先頭、「前へ」で末尾へ。
+ * キーは PageDown / PageUp。矢印キーは MapLibre が地図の移動に使うので取らない。
+ * -------------------------------------------------------------------------- */
+let tourCache = null;
+function tourList() {
+  if (!tourCache) {
+    tourCache = PONDS.filter(pondPasses).sort((a, b) =>
+      (b.vol ?? -1) - (a.vol ?? -1) || a.name.localeCompare(b.name, "ja")
+      || a.pond_id - b.pond_id);
+  }
+  return tourCache;
+}
+function renderPondNav() {
+  if (!selectedPond) return;                 // パネルごと隠れている
+  const list = tourList();
+  const i = list.indexOf(selectedPond);
+  $("pPos").textContent = (i >= 0 ? (i + 1) : "–") + " / " + list.length + " 池";
+  $("pPrev").disabled = !list.length || i === 0;
+  $("pNext").disabled = !list.length || i === list.length - 1;
+}
+function stepPond(d) {
+  if (!selectedPond) return false;
+  const list = tourList();
+  if (!list.length) return false;
+  const i = list.indexOf(selectedPond);
+  const j = i < 0 ? (d > 0 ? 0 : list.length - 1) : i + d;
+  if (j < 0 || j >= list.length) return false;
+  selectPond(list[j]);
+  return true;
+}
+$("pPrev").onclick = () => stepPond(-1);
+$("pNext").onclick = () => stepPond(1);
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "PageDown" && e.key !== "PageUp") return;
+  if (e.ctrlKey || e.altKey || e.metaKey || !selectedPond) return;
+  const t = e.target;
+  if (t && t.closest && t.closest("input, select, textarea, [contenteditable]")) return;
+  if ($("introBack").classList.contains("open") || $("tileDlgBack").classList.contains("open")
+      || $("filterPanel").classList.contains("open")
+      || $("sharePanel").classList.contains("open")) return;
+  e.preventDefault();
+  stepPond(e.key === "PageDown" ? 1 : -1);
+});
+window.__tour = { list: tourList, step: stepPond };
+
 /* ==========================================================================
  * 6. 水位 — v1.5 のまま。左右で 1 つの共有状態
  * ========================================================================== */
@@ -1970,9 +2170,18 @@ window.__filter = { state: pondFilter, apply: applyPondFilter, passes: pondPasse
 let selectedWaterLevel = null;
 const fmtElev = (v) => (typeof v === "number" ? v : parseFloat(v)).toFixed(2);
 
+/** v1.9.5-q: 左上の水位カード。池を選んでいるか、水位を読んでいるときに出す。
+ *  水位が無いときは値とボタンを隠して案内の文だけにする (#wl の文字は「未選択」のまま持つ)。 */
+function renderWaterCard() {
+  const has = selectedWaterLevel !== null;
+  const card = $("panel-wl");
+  card.classList.toggle("on", has || !!selectedPond);
+  card.classList.toggle("empty", !has);
+}
 function setWaterLevel(v) {
   selectedWaterLevel = v;
   $("wl").textContent = (v === null) ? "未選択" : fmtElev(v) + " m";
+  renderWaterCard();
   for (const m of MAPS) {
     if (m.getLayer(SELECTED_CONTOUR_LAYER)) {
       m.setFilter(SELECTED_CONTOUR_LAYER, selectedContourFilter(v));
@@ -2768,8 +2977,175 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openIntro(); }
   });
 })();
-if (Q.get("intro") === "1" || (Q.get("intro") !== "0" && !introHidden())) openIntro();
+// v1.9.5-q: 共有リンク (?pond= 付き) で開いたときは出さない。見せたい画面が隠れるため
+if (Q.get("intro") === "1" || (Q.get("intro") !== "0" && !Q.has("pond") && !introHidden())) openIntro();
 window.__intro = { open: openIntro, close: closeIntro, hidden: introHidden, key: INTRO_KEY };
+
+/* --------------------------------------------------------------------------
+ * 10-2c. 共有リンクと要約文 (v1.9.5-q。見本)
+ *
+ * いまの画面の状態を URL の query に載せる。既定値と同じものは載せない。
+ * 地図の位置は MapLibre が書いている hash (#zoom/lat/lng) をそのまま使う。
+ *   pond=<lat>,<lon>   選んだ池 (6 桁)。★ pond_id は並び順なので載せない
+ *                      (ため池一覧を更新すると別の池を指してしまう)
+ *   wl=<m>             読んだ水位
+ *   l= / r=            左右の背景 (BASEMAPS のキーだけ。外部タイルは載せない)
+ *   view= / swipe=     1画面・スワイプ (v1.9.2-q からある入口をそのまま使う)
+ *   bl= / br=          明るさ (%)
+ *   ct=off|white|black 等高線の表示 OFF / 色
+ *   ax=v|h|none        測線
+ * 受け取った値は必ず検査し、合わないものは捨てて既定で開く。HTML には入れない。
+ * 復元は既存の入口 (setBasemap / pane.setBrightness / applyContourStyle / selectPond /
+ * setWaterLevel) を呼ぶだけで、別の経路は作らない。
+ * アドレスバーは書き換えない (リンクはパネルを開いたときに作る)。
+ * -------------------------------------------------------------------------- */
+const SHARE_WL_MIN = -100, SHARE_WL_MAX = 3000;      // 水位として受け取る範囲 [m]
+const pondCoordKey = (p) => p.lat.toFixed(6) + "," + p.lon.toFixed(6);
+
+function shareState() {
+  const out = [];                                    // [key, value] の並び。順番を固定する
+  let customDropped = false;
+  if (Q.get("dataset") && DATASETS[Q.get("dataset")]) out.push(["dataset", Q.get("dataset")]);
+  if (selectedPond) out.push(["pond", pondCoordKey(selectedPond)]);
+  if (selectedWaterLevel !== null) out.push(["wl", fmtElev(selectedWaterLevel)]);
+  const base = (k, key, def) => {
+    if (!BASEMAPS[key]) { customDropped = true; return; }      // 外部タイルは共有できない
+    if (key !== def) out.push([k, key]);
+  };
+  base("l", leftBaseKey, BASE_L_DEFAULT);
+  if (mapR) base("r", rightBaseKey, BASE_R_DEFAULT);
+  if (mapR && viewMode === "single") {
+    out.push(["view", swipeOn ? "swipe" : "single"]);
+    if (swipeOn && swipe.dir === "tb") out.push(["swipe", "tb"]);
+  }
+  if (paneL.bright !== BRIGHT_DEFAULT) out.push(["bl", String(paneL.bright)]);
+  if (paneR && paneR.bright !== BRIGHT_DEFAULT) out.push(["br", String(paneR.bright)]);
+  if (!contourOn) out.push(["ct", "off"]);
+  else if (contourStyleKey !== CONTOUR_STYLE_DEFAULT) out.push(["ct", contourStyleKey]);
+  if (axisDir !== "both") out.push(["ax", axisDir]);
+  return { params: out, customDropped };
+}
+function buildShareUrl() {
+  const st = shareState();
+  // 値は英数字と . , - だけ。カンマは読みやすさのためそのまま残す
+  const qs = st.params.map(([k, v]) => k + "=" + encodeURIComponent(v).replace(/%2C/g, ",")).join("&");
+  const hash = /^#\d/.test(location.hash) ? location.hash : "";
+  return location.origin + location.pathname + (qs ? "?" + qs : "") + hash;
+}
+function buildShareText() {
+  const lines = ["【ため池防災Webビューア】"];
+  if (selectedPond) {
+    const where = (selectedPond.city + " " + selectedPond.addr).trim();
+    lines.push("ため池: " + selectedPond.name + (where ? "（" + where + "）" : ""));
+  }
+  if (selectedWaterLevel !== null) {
+    lines.push("水位: " + fmtElev(selectedWaterLevel) + " m（等高線からの読み取り。参考値）");
+  }
+  if (mapR && viewMode === "single" && !swipeOn) {
+    lines.push("表示: " + basemapName(leftBaseKey));
+  } else if (mapR) {
+    lines.push("表示: 左 " + basemapName(leftBaseKey) + " ／ 右 " + basemapName(rightBaseKey));
+  } else {
+    lines.push("表示: " + basemapName(leftBaseKey));
+  }
+  const d = new Date(), z = (n) => String(n).padStart(2, "0");
+  lines.push("作成: " + d.getFullYear() + "-" + z(d.getMonth() + 1) + "-" + z(d.getDate()));
+  lines.push(buildShareUrl());
+  return lines.join("\n");
+}
+
+function renderSharePanel() {
+  $("shareUrl").value = buildShareUrl();
+  $("shareText").value = buildShareText();          // ★ value。利用者が付けた地図名を HTML にしない
+  $("shareWarn").classList.toggle("on", shareState().customDropped);
+}
+function setShareOpen(open) {
+  const panel = $("sharePanel");
+  if (open) {
+    const r = $("shareBtn").getBoundingClientRect();
+    panel.style.left = Math.max(4, Math.min(window.innerWidth - 348, Math.round(r.left))) + "px";
+    $("shareDone").textContent = "";
+    renderSharePanel();
+  }
+  panel.classList.toggle("open", open);
+  $("shareBtn").setAttribute("aria-expanded", String(open));
+}
+let shareDoneTimer = 0;
+function copyShare(el, label) {
+  const done = (ok) => {
+    $("shareDone").textContent = ok ? label + "をコピーしました"
+                                    : "コピーできませんでした。欄を選んで Ctrl+C で写してください";
+    clearTimeout(shareDoneTimer);
+    shareDoneTimer = setTimeout(() => { $("shareDone").textContent = ""; }, 2500);
+  };
+  const fallback = () => {
+    el.focus(); el.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    done(ok);
+  };
+  renderSharePanel();                                // コピーの直前の状態で作り直す
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(el.value).then(() => done(true), fallback);
+  } else {
+    fallback();
+  }
+}
+$("shareBtn").onclick = (e) => {
+  e.stopPropagation();
+  setShareOpen(!$("sharePanel").classList.contains("open"));
+};
+$("sharePanel").addEventListener("click", (e) => e.stopPropagation());
+$("shareCopyUrl").onclick = () => copyShare($("shareUrl"), "リンク");
+$("shareCopyText").onclick = () => copyShare($("shareText"), "要約文");
+$("shareClose").onclick = () => setShareOpen(false);
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#sharePanel") && !e.target.closest("#shareBtn")) setShareOpen(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("sharePanel").classList.contains("open")) setShareOpen(false);
+});
+
+/** 共有リンクの「見え方」の復元。地図の layer ができてから呼ぶ (setBasemap は layer が要る)。 */
+function applyShareView() {
+  const l = Q.get("l"), r = Q.get("r");
+  if (l && BASEMAPS[l] && l !== leftBaseKey) {
+    leftBaseKey = l; $("baseL").value = l; setBasemap(paneL, l);
+  }
+  if (paneR && r && BASEMAPS[r] && r !== rightBaseKey) { $("baseR").value = r; setBasemap(paneR, r); }
+  const num = (k) => (Q.has(k) && /^\d{1,4}$/.test(Q.get(k))) ? Number(Q.get(k)) : null;
+  const bl = num("bl"), br = num("br");
+  if (bl !== null && paneL.setBrightness) paneL.setBrightness(bl);       // 0〜500 に丸められる
+  if (br !== null && paneR && paneR.setBrightness) paneR.setBrightness(br);
+  const ct = Q.get("ct");
+  if (ct === "off" || (ct && CONTOUR_STYLES[ct])) {
+    if (ct === "off") contourOn = false; else contourStyleKey = ct;
+    applyContourStyle();
+  }
+  const ax = Q.get("ax");
+  if (ax === "v" || ax === "h" || ax === "none") { axisDir = ax; refreshAxisLabels(); }
+  syncControlsToState();
+}
+/** 共有リンクの池と水位の復元。ため池データを地図へ載せたあとに呼ぶ。 */
+function applySharePond() {
+  const m = /^(-?\d{1,3}\.\d{1,8}),(-?\d{1,3}\.\d{1,8})$/.exec(Q.get("pond") || "");
+  if (m) {
+    const key = Number(m[1]).toFixed(6) + "," + Number(m[2]).toFixed(6);
+    const p = PONDS.find((x) => pondCoordKey(x) === key);
+    // 位置の hash が付いていれば地図はもうその場所にある。無ければ池へ寄せる
+    if (p) selectPond(p, { move: !HAD_HASH });
+    else console.warn("[v1.6] share: pond に合う池がありません:", key);
+  }
+  const w = Q.get("wl");
+  if (w !== null && /^-?\d{1,4}(\.\d{1,3})?$/.test(w)) {
+    const v = Number(w);
+    if (v >= SHARE_WL_MIN && v <= SHARE_WL_MAX) setWaterLevel(v);
+  }
+}
+Promise.all(MAPS.map((m) => whenSourceReady(m))).then(applyShareView)
+  .catch((err) => console.error("[v1.6] share: 表示の復元に失敗:", err));
+window.__share = { url: buildShareUrl, text: buildShareText, state: shareState,
+                   open: setShareOpen, applyView: applyShareView, applyPond: applySharePond };
 
 window.__tile = { open: openTileDialog, close: closeTileDialog, submit: submitTileForm,
                   del: deleteCustom, list: () => CUSTOM_BASEMAPS.slice(),
@@ -3021,7 +3397,7 @@ function tagObstacles(st) {
     out.push({ l: r.left - st.left - TAG_GAP, t: r.top - st.top - TAG_GAP,
                r: r.right - st.left + TAG_GAP, b: r.bottom - st.top + TAG_GAP });
   };
-  for (const id of ["panel-pond", "brightL", "brightR", "swipeBar", "diag-chip",
+  for (const id of ["panel-pond", "panel-wl", "brightL", "brightR", "swipeBar", "diag-chip",
                     "panel-diag", "tilewarn"]) add($(id));
   // スワイプ中に見えているのは右地図のコントロール (左地図のものは隠してある)
   for (const el of mapR.getContainer().querySelectorAll(".maplibregl-ctrl")) add(el);
@@ -3064,7 +3440,22 @@ function basemapName(key) {
   const c = customById(key);
   return c ? c.name : String(key);
 }
+/** v1.9.5-q: 画面ラベル「左｜地図名」。地図名は textContent で入れる (利用者が付けた名前がある)。 */
+function updatePaneLabels() {
+  const put = (id, key) => {
+    const el = $(id);
+    if (!el || !el.querySelector(".side")) return;      // ?panes=1 の右は文言を差し替えてある
+    let bm = el.querySelector(".bm");
+    if (!bm) { bm = document.createElement("span"); bm.className = "bm"; el.appendChild(bm); }
+    const name = basemapName(key);
+    bm.textContent = name;
+    el.title = el.querySelector(".side").textContent + ": " + name;
+  };
+  put("paneLabelL", leftBaseKey);
+  if (mapR) put("paneLabelR", rightBaseKey);
+}
 function updateSwipeTags() {
+  updatePaneLabels();
   const lr = swipe.dir === "lr";
   const put = (el, head, name) => {
     while (el.firstChild) el.removeChild(el.firstChild);
@@ -3081,7 +3472,7 @@ function updateSwipeTags() {
 // ラベルを置き直す (重ならないように)。
 if (window.ResizeObserver && mapR) {
   const ro = new ResizeObserver(() => layoutTags());
-  for (const id of ["panel-pond", "brightL", "brightR", "panel-diag", "diag-chip"]) ro.observe($(id));
+  for (const id of ["panel-pond", "panel-wl", "brightL", "brightR", "panel-diag", "diag-chip"]) ro.observe($(id));
 }
 
 /** 向きを変える。境界はいつも中央へ戻す (単純な操作にするため)。 */
@@ -3230,7 +3621,9 @@ function whenSourceReady(map) {
     await Promise.all(MAPS.map((m) => whenSourceReady(m)));
     const n = pushPondsToMaps();
     pondsReady = true;
+    tourCache = null;                              // 読み込み前に作った空の一覧を捨てる
     if (!HAD_HASH) fitOverview({ duration: 0 });   // 初期表示は能登全域
+    applySharePond();                              // v1.9.5-q: 共有リンクの池と水位
     console.log("[v1.6] ponds pushed to " + n + " map(s), overview="
                 + (!HAD_HASH) + " (hash=" + HAD_HASH + ")");
     window.__pondsReady = true;                    // 自動確認用の目印
