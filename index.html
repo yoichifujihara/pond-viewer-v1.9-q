@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- 版: 公開画面の表記は v1.9-q、内部の開発版は v1.9.5-q (APP_BUILD)。
+<!-- 版: 公開画面の表記は v1.9-q、内部の開発版は v1.9.6-q (APP_BUILD)。
      公開先は pond-viewer-v1.9-q のまま (URL は変えない運用)。 -->
-<meta name="pondatlas-build" content="v1.9.5-q">
+<meta name="pondatlas-build" content="v1.9.6-q">
 <title>ため池防災Webビューア | v1.9-q</title>
 <!-- v1.9-q: 外部 CDN (unpkg) をやめ、MapLibre GL JS 5.24.0 を vendor/ へ同梱した。
      公開サイトの表示を自分たちの管理下に置くため。LICENSE も同梱している。
@@ -544,7 +544,7 @@ body.vm-swipe #swipeBar { display:flex; }
 <body>
 
 <div id="topbar">
-  <span class="brand"><b>ため池防災Webビューア</b><span class="ver" title="内部版 v1.9.5-q">GitHub Pages 試験運用版 v1.9-q</span></span>
+  <span class="brand"><b>ため池防災Webビューア</b><span class="ver" title="内部版 v1.9.6-q">GitHub Pages 試験運用版 v1.9-q</span></span>
   <!-- v1.9.4-q: 機能ごとに枠でまとめた。見出しは案内カード (#intro) の
        「探す / 見比べる / 見やすくする」と同じ。中の要素の ID と動作は変えていない。 -->
   <div class="tgrp" id="tgSearch" role="group" aria-label="探す" data-cap="探す">
@@ -853,7 +853,7 @@ body.vm-swipe #swipeBar { display:flex; }
 "use strict";
 const T0 = performance.now();
 // 内部の開発版と、画面に出す公開版。公開表記は据え置く運用 (v1.9.2-q 指示 2 節)。
-const APP_BUILD = "v1.9.5-q";
+const APP_BUILD = "v1.9.6-q";
 const APP_PUBLIC_VERSION = "v1.9-q";
 console.log("[v1.6] build " + APP_BUILD + " (公開表記 " + APP_PUBLIC_VERSION + ")");
 
@@ -1139,6 +1139,13 @@ const POND_LINKS = [
   { label: "Google マップ (航空写真)",
     url: "https://www.google.com/maps/@?api=1&map_action=map&center={lat},{lon}&zoom={z}&basemap=satellite" },
 ];
+
+// v1.9.6-q: 閲覧数だけを GoatCounter で数える (10-2d 節)。空なら何も送らない。
+// 送るのは開いた回数 1 回だけで、地図の位置・選んだ池・共有リンクの中身は送らない。
+// 自分で開くときは ?intro=0 を付けると数えない (count.js の「自分を数えない」は効かない作り)。
+const ANALYTICS_ENDPOINT = "https://pond-viewer.goatcounter.com/count";
+// 送るのはこのホストで開いたときだけ (127.0.0.1・凍結コピー・手元の確認では送らない)。
+const ANALYTICS_HOSTS = ["yoichifujihara.github.io"];
 
 /* --- v1.5 から持ち越した定数 (アルゴリズムごと変更しない) ---------------- */
 const CLICK_TOLERANCE_PX = 6;    // クリック点から等高線までの許容距離 [px]
@@ -2980,6 +2987,53 @@ document.addEventListener("keydown", (e) => {
 // v1.9.5-q: 共有リンク (?pond= 付き) で開いたときは出さない。見せたい画面が隠れるため
 if (Q.get("intro") === "1" || (Q.get("intro") !== "0" && !Q.has("pond") && !introHidden())) openIntro();
 window.__intro = { open: openIntro, close: closeIntro, hidden: introHidden, key: INTRO_KEY };
+
+/* --------------------------------------------------------------------------
+ * 10-2d. 閲覧数 (v1.9.6-q)
+ *
+ * 開いたときに GoatCounter へ 1 回だけ数を送る。外部スクリプト (count.js) は読まず、
+ * 画像 1 枚の GET で送る (外部 CDN に依存しない決まり)。Cookie・localStorage は使わない。
+ *   p  パスは常に "/"。★ query (共有リンクの pond= 等) と hash (地図の位置) は送らない
+ *   r  来た元はオリジンだけ (自サイト内なら送らない)
+ * 送らない: 設定が空 / ANALYTICS_HOSTS 以外 / ?intro=0 (自動確認) / 自動操作のブラウザ。
+ * 届かなくても何もしない (画面にも警告にも出さない)。
+ * -------------------------------------------------------------------------- */
+function analyticsUrl(endpoint) {
+  const u = new URL(endpoint);
+  u.search = "";
+  u.hash = "";
+  u.searchParams.set("p", "/");
+  u.searchParams.set("t", "ため池防災Webビューア");
+  try {
+    if (document.referrer) {
+      const ref = new URL(document.referrer).origin;
+      if (ref !== location.origin) u.searchParams.set("r", ref);
+    }
+  } catch (e) { /* 読めない referrer は送らない */ }
+  if (screen && screen.width) u.searchParams.set("s", String(screen.width));
+  u.searchParams.set("rnd", Math.random().toString(36).slice(2, 8));   // キャッシュよけ
+  return u.toString();
+}
+function analyticsSkipReason() {
+  if (!ANALYTICS_ENDPOINT) return "設定なし";
+  if (!ANALYTICS_HOSTS.includes(location.hostname)) return "対象外のホスト " + location.hostname;
+  if (Q.get("intro") === "0") return "intro=0";
+  if (navigator.webdriver) return "自動操作";
+  return "";
+}
+(function sendPageview() {
+  const why = analyticsSkipReason();
+  if (why) { console.info("[v1.6] analytics 送らない (" + why + ")"); return; }
+  try {
+    const img = new Image();
+    img.referrerPolicy = "no-referrer";       // 自分の URL (query に池の位置) を Referer で渡さない
+    img.src = analyticsUrl(ANALYTICS_ENDPOINT);
+    console.info("[v1.6] analytics 送信 1 回");
+  } catch (e) { /* 数えられなくても動作は止めない */ }
+})();
+// 確認用: 送らずに、送るはずの URL だけを作る (_probe から呼ぶ)
+window.__analytics = { url: analyticsUrl, skip: analyticsSkipReason,
+                       endpoint: ANALYTICS_ENDPOINT, hosts: ANALYTICS_HOSTS };
 
 /* --------------------------------------------------------------------------
  * 10-2c. 共有リンクと要約文 (v1.9.5-q。見本)
